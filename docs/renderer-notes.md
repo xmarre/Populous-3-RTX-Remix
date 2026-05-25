@@ -23,14 +23,14 @@ CameraManager: rejected an invalid camera.
 
 Interpretation:
 
-- RTX Remix is hooked correctly.
-- The current D3D9 path is not providing a Remix-useful camera/scene.
-- Ray tracing cannot reconstruct the world from already transformed/screen-space draw calls.
+- The selector hook can route Remix into the game executable instead of the launcher.
+- The current Direct3D9 renderer path can still be incompatible with RTX Remix scene reconstruction.
+- Pre-transformed/screen-space draw calls do not provide the world-space camera and geometry state Remix needs for path tracing.
 - UI/HUD visibility issues with ray tracing enabled are secondary to the missing valid scene/camera.
 
 Potential next tests:
 
-1. Different Multiverse renderer modes.
-2. Original hardware renderer path if exposed by launcher.
-3. Alternative D3D wrapper chain that preserves fixed-function world transforms.
-4. USD capture inspection for `Camera` and meaningful `Mesh` entries.
+1. Try every available Multiverse renderer mode that still produces Direct3D9 calls.
+2. Try the original hardware renderer path if exposed by the launcher.
+3. Try a DirectDraw-to-D3D9 wrapper path only if it preserves enough fixed-function world/view/projection state for Remix.
+4. Capture a USD frame and inspect whether it contains a real `Camera` and meaningful `Mesh` entries.
