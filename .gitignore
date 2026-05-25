@@ -1,11 +1,13 @@
-# Local selector shim build output and NVIDIA runtime binaries are not committed.
-/d3d9.dll
+# NVIDIA runtime binaries are not committed. The root d3d9.dll selector shim is committed.
 /d3d9-remix.dll
+/d3d9.lib
+/d3d9.exp
 /.trex/
 
 # Populous game files / executables
 /*.exe
 /*.dll
+!/d3d9.dll
 /*.dat
 /*.bik
 /*.smk

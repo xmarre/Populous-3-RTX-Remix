@@ -34,7 +34,7 @@ popTB.exe              -> d3d9-remix.dll -> .trex runtime
 
 ## Fix
 
-The repository contains selector shim source under `src/d3d9-remix-selector`. Building it writes the selector DLL to the repository root as `d3d9.dll`.
+The repository contains the prebuilt selector shim as the root `d3d9.dll`, plus its source under `src/d3d9-remix-selector`. The root `d3d9.dll` must be committed and copied to the game folder.
 
 The official NVIDIA RTX Remix bridge DLL must be renamed to:
 
@@ -42,7 +42,7 @@ The official NVIDIA RTX Remix bridge DLL must be renamed to:
 d3d9-remix.dll
 ```
 
-The shim exports the normal D3D9 entry points. On first use it checks the current process executable name:
+The shim exports the normal D3D9 entry points and includes both the legacy D3D9 ordinal aliases and the newer Windows D3D9/D3D9On12 ordinal range. On first use it checks the current process executable name:
 
 - game executable: load and forward to `d3d9-remix.dll` from the game root.
 - anything else, including `MultiverseLauncher.exe`: load and forward to `%SystemRoot%\System32\d3d9.dll`.

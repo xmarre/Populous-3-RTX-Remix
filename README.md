@@ -2,7 +2,7 @@
 
 RTX Remix setup files for experimenting with **Populous: The Beginning / Populous 3** through the **Multiverse Launcher**.
 
-This repository is meant to be copied directly into the Populous 3 game directory. The repo now includes source for a small `d3d9.dll` selector shim so the launcher itself does **not** load RTX Remix. Remix is only routed into the actual game executable.
+This repository is meant to be copied directly into the Populous 3 game directory. The repo now includes a small root `d3d9.dll` selector shim so the launcher itself does **not** load RTX Remix. Remix is only routed into the actual game executable.
 
 ## What is fixed here
 
@@ -11,7 +11,7 @@ The previous layout required NVIDIA's RTX Remix `d3d9.dll` to sit in the game ro
 The new layout is:
 
 ```text
-D:\Spiele\Populous 3\d3d9.dll             <-- selector shim built from this repo
+D:\Spiele\Populous 3\d3d9.dll             <-- included selector shim from this repo
 D:\Spiele\Populous 3\d3d9-remix.dll       <-- NVIDIA RTX Remix root d3d9.dll, renamed
 D:\Spiele\Populous 3\.trex\               <-- NVIDIA RTX Remix runtime folder
 D:\Spiele\Populous 3\rtx.conf
@@ -28,20 +28,19 @@ Runtime behavior:
 
 ## Install
 
-1. Build the selector shim from `src\d3d9-remix-selector\build-selector.cmd`. The output is the repository root `d3d9.dll`.
-2. Copy this repository's contents into the Populous 3 directory.
-3. Download the official NVIDIA RTX Remix Runtime.
-4. Copy the runtime `.trex` folder into the Populous 3 directory.
-5. Rename the runtime's root `d3d9.dll` to:
+1. Copy this repository's contents into the Populous 3 directory. The root `d3d9.dll` from this repo must remain in place; it is the selector shim.
+2. Download the official NVIDIA RTX Remix Runtime.
+3. Copy the runtime `.trex` folder into the Populous 3 directory.
+4. Rename the runtime's root `d3d9.dll` to:
 
 ```text
 d3d9-remix.dll
 ```
 
-6. Put that renamed file next to the built `d3d9.dll` selector.
-7. Start the game normally through `MultiverseLauncher.exe`.
+5. Put that renamed file next to this repo's root `d3d9.dll` selector.
+6. Start the game normally through `MultiverseLauncher.exe`.
 
-Do **not** overwrite the built root `d3d9.dll` with NVIDIA's root `d3d9.dll`. The root `d3d9.dll` from this repo is the process selector. NVIDIA's root bridge DLL must be named `d3d9-remix.dll`.
+Do **not** rename this repo's root `d3d9.dll`. Rename only NVIDIA's Runtime root `d3d9.dll` to `d3d9-remix.dll`. The root `d3d9.dll` from this repo is the process selector.
 
 ## Expected file check
 
@@ -54,7 +53,7 @@ Get-Item "$GamePath\d3d9.dll", "$GamePath\d3d9-remix.dll", "$GamePath\.trex\d3d9
 
 Expected meaning:
 
-- `d3d9.dll`: selector shim built from this repo.
+- `d3d9.dll`: selector shim from this repo.
 - `d3d9-remix.dll`: renamed NVIDIA RTX Remix bridge DLL.
 - `.trex\d3d9.dll`: NVIDIA RTX Remix renderer/runtime DLL.
 
@@ -131,3 +130,15 @@ d3d9-remix.dll
 ```
 
 Populous game files are also not redistributed.
+
+## If RTX Remix does not load
+
+Check the root folder first. If the only D3D9 file is `d3d9-remix.dll`, Windows has no local `d3d9.dll` to load and Remix cannot start. The folder must contain both files at the same time:
+
+```text
+d3d9.dll          selector shim from this repo
+d3d9-remix.dll    renamed NVIDIA RTX Remix bridge
+.trex\            NVIDIA RTX Remix runtime folder
+```
+
+This repo intentionally commits the selector `d3d9.dll`; NVIDIA runtime binaries remain ignored.
