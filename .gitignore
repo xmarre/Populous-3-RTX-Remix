@@ -1,0 +1,62 @@
+# RTX Remix Runtime binaries - download separately from NVIDIA
+/d3d9.dll
+/.trex/
+
+# Populous game files / executables
+/*.exe
+/*.dll
+/*.dat
+/*.bik
+/*.smk
+/data/
+/levels/
+/levluw/
+/save/
+/SAVE/
+
+# Runtime output
+/rtx-remix/logs/*
+!/rtx-remix/logs/.gitkeep
+/rtx-remix/captures/*
+!/rtx-remix/captures/.gitkeep
+*.dmp
+*.log
+metrics.txt
+imgui.ini
+
+# Local launcher state
+launcher.ini
+ddraw.ini
+dxcfg.ini
+net.cfg
+
+# Local workspace / agent state
+.vs/
+.codex/
+.vscode/
+.idea/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+*.disabled
+
+# Local environment / dependency output
+.env
+.env.*
+node_modules/
+dist/
+build/
+out/
+coverage/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
