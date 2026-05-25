@@ -14,7 +14,7 @@ popTB.exe              -> d3d9-remix.dll -> .trex runtime
 Install requirement:
 
 ```text
-<game>\d3d9.dll          selector shim built from this repo
+<game>\d3d9.dll          selector shim from this repo
 <game>\d3d9-remix.dll    NVIDIA RTX Remix root bridge d3d9.dll, renamed
 <game>\.trex\            NVIDIA RTX Remix runtime folder
 ```
@@ -28,3 +28,5 @@ The remaining known blocker is renderer compatibility, not launcher hook selecti
 ```
 
 That means Remix is not receiving a usable world-space 3D scene/camera from the current renderer path. Visual RTX settings therefore may still not materially change the game scene.
+
+The previous source zip was missing the committed root `d3d9.dll`, so renaming NVIDIA's `d3d9.dll` to `d3d9-remix.dll` left no local D3D9 entry point for Windows to load. This version commits the selector binary and keeps NVIDIA runtime binaries ignored.

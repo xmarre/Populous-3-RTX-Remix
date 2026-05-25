@@ -24,6 +24,8 @@ d3d9.dll: PE32 executable for MS Windows 6.00 (DLL), Intel i386
 Export table contains:
 
 ```text
+Legacy ordinal aliases 1-14
+Current Windows D3D9/D3D9On12 ordinal range 16-38
 D3DPERF_BeginEvent
 D3DPERF_EndEvent
 D3DPERF_GetStatus
@@ -50,6 +52,7 @@ objdump -p C:\Windows\SysWOW64\d3d9.dll
 ```
 
 The observed system export table uses ordinal base 16 and address-table ordinals 16 through 38. The selector `.def` mirrors those ordinals, including unnamed ordinal-only exports 16, 17, 18, 19, 22, and 23.
+The selector also includes legacy ordinal-only aliases 1 through 14 for older D3D9 import tables.
 
 Selector export manifest:
 
@@ -80,5 +83,23 @@ Selector export manifest:
 | 38 | `Direct3DCreate9Ex` |
 
 The selector DLL has no import table. It resolves `kernel32`/`kernelbase` exports through the process PEB, then loads either the renamed Remix bridge or the system D3D9 DLL by absolute path.
+
+SHA-256 of the included selector:
+
+```text
+7c7818d937f1b3c11b373f2eeadc60443d8907ac8bd3d37b6c65f97e9beb85ab  d3d9.dll
+```
+
+## Selector binary included
+
+The release archive must contain a root-level `d3d9.dll`. If it does not, RTX Remix cannot load after NVIDIA's bridge has been renamed to `d3d9-remix.dll`.
+
+Install checklist:
+
+```text
+<game>\d3d9.dll          selector shim from this repo
+<game>\d3d9-remix.dll    renamed NVIDIA RTX Remix bridge
+<game>\.trex\            NVIDIA RTX Remix runtime folder
+```
 
 Not validated here: live Windows runtime behavior with Multiverse Launcher, because the container cannot run Windows executables.

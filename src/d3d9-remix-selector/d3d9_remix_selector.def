@@ -1,5 +1,23 @@
 LIBRARY d3d9
 EXPORTS
+; Legacy Direct3D 9 export ordinals seen on older Windows d3d9.dll builds.
+; These NONAME aliases keep old games/wrappers that import d3d9 by ordinal working.
+Direct3DShaderValidatorCreate9_ord1=Direct3DShaderValidatorCreate9_stub @1 NONAME
+PSGPError_ord2=PSGPError_stub @2 NONAME
+PSGPSampleTexture_ord3=PSGPSampleTexture_stub @3 NONAME
+D3DPERF_BeginEvent_ord4=D3DPERF_BeginEvent_stub @4 NONAME
+D3DPERF_EndEvent_ord5=D3DPERF_EndEvent_stub @5 NONAME
+D3DPERF_GetStatus_ord6=D3DPERF_GetStatus_stub @6 NONAME
+D3DPERF_QueryRepeatFrame_ord7=D3DPERF_QueryRepeatFrame_stub @7 NONAME
+D3DPERF_SetMarker_ord8=D3DPERF_SetMarker_stub @8 NONAME
+D3DPERF_SetOptions_ord9=D3DPERF_SetOptions_stub @9 NONAME
+D3DPERF_SetRegion_ord10=D3DPERF_SetRegion_stub @10 NONAME
+DebugSetLevel_ord11=DebugSetLevel_stub @11 NONAME
+DebugSetMute_ord12=DebugSetMute_stub @12 NONAME
+Direct3DCreate9_ord13=Direct3DCreate9_stub @13 NONAME
+Direct3DCreate9Ex_ord14=Direct3DCreate9Ex_stub @14 NONAME
+
+; Current Windows D3D9 export ordinal range, including D3D9On12 additions.
 Ordinal16=Ordinal16_stub @16 NONAME
 Ordinal17=Ordinal17_stub @17 NONAME
 Ordinal18=Ordinal18_stub @18 NONAME
