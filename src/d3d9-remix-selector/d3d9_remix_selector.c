@@ -41,6 +41,7 @@ typedef HMODULE (__attribute__((stdcall)) *PFN_LoadLibraryW)(LPCWSTR);
 typedef FARPROC (__attribute__((stdcall)) *PFN_GetProcAddress)(HMODULE, LPCSTR);
 typedef DWORD   (__attribute__((stdcall)) *PFN_GetModuleFileNameW)(HMODULE, LPWSTR, DWORD);
 typedef UINT    (__attribute__((stdcall)) *PFN_GetSystemDirectoryW)(LPWSTR, UINT);
+typedef void    (__attribute__((stdcall)) *PFN_RaiseException)(DWORD, DWORD, DWORD, const PVOID*);
 
 typedef struct LIST_ENTRY_ {
   struct LIST_ENTRY_* Flink;
@@ -181,6 +182,9 @@ static PFN_LoadLibraryW pLoadLibraryW = NULL;
 static PFN_GetProcAddress pGetProcAddress = NULL;
 static PFN_GetModuleFileNameW pGetModuleFileNameW = NULL;
 static PFN_GetSystemDirectoryW pGetSystemDirectoryW = NULL;
+static PFN_RaiseException pRaiseException = NULL;
+
+void MissingExportFailure_stub(void);
 
 static PEB* get_peb(void) {
   PEB* peb;
@@ -363,7 +367,7 @@ static int ensure_kernel_functions(void) {
   HMODULE k32;
   HMODULE kb;
 
-  if (pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW) return 1;
+  if (pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pRaiseException) return 1;
 
   k32 = find_loaded_module_w(KERNEL32_DLL);
   kb = find_loaded_module_w(KERNELBASE_DLL);
@@ -384,8 +388,12 @@ static int ensure_kernel_functions(void) {
     pGetSystemDirectoryW = (PFN_GetSystemDirectoryW)resolve_export(k32, "GetSystemDirectoryW");
     if (!pGetSystemDirectoryW) pGetSystemDirectoryW = (PFN_GetSystemDirectoryW)resolve_export(kb, "GetSystemDirectoryW");
   }
+  if (!pRaiseException) {
+    pRaiseException = (PFN_RaiseException)resolve_export(k32, "RaiseException");
+    if (!pRaiseException) pRaiseException = (PFN_RaiseException)resolve_export(kb, "RaiseException");
+  }
 
-  return pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW;
+  return pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pRaiseException;
 }
 
 static unsigned int wide_len(const WCHAR* s) {
@@ -428,6 +436,20 @@ static const WCHAR* basename_from_path(const WCHAR* path) {
   return base;
 }
 
+static int get_module_file_name_checked(HMODULE module, WCHAR* dst, DWORD cap) {
+  DWORD len;
+  if (!dst || cap < 2) return 0;
+  dst[0] = 0;
+  if (!ensure_kernel_functions()) return 0;
+  len = pGetModuleFileNameW(module, dst, cap);
+  if (!len || len >= cap - 1) {
+    dst[cap - 1] = 0;
+    return 0;
+  }
+  dst[len] = 0;
+  return 1;
+}
+
 static int is_game_process(void) {
   static const WCHAR POPTBM_EXE[]   = { 'p','o','p','T','B','M','.','e','x','e',0 };
   static const WCHAR D3DPOPTB_EXE[] = { 'D','3','D','P','o','p','T','B','.','e','x','e',0 };
@@ -436,8 +458,7 @@ static int is_game_process(void) {
   const WCHAR* base;
 
   exe_path[0] = 0;
-  if (!ensure_kernel_functions()) return 0;
-  if (!pGetModuleFileNameW(NULL, exe_path, MAX_PATH_CHARS)) return 0;
+  if (!get_module_file_name_checked(NULL, exe_path, MAX_PATH_CHARS)) return 0;
   base = basename_from_path(exe_path);
 
   return wide_basename_eq(base, POPTBM_EXE) ||
@@ -448,9 +469,12 @@ static int is_game_process(void) {
 static HMODULE load_system_d3d9(void) {
   static const WCHAR SLASH_D3D9_DLL[] = { '\\','d','3','d','9','.','d','l','l',0 };
   WCHAR path[MAX_PATH_CHARS];
+  UINT len;
   path[0] = 0;
   if (!ensure_kernel_functions()) return NULL;
-  if (!pGetSystemDirectoryW(path, MAX_PATH_CHARS)) return NULL;
+  len = pGetSystemDirectoryW(path, MAX_PATH_CHARS);
+  if (!len || len >= MAX_PATH_CHARS) return NULL;
+  path[len] = 0;
   wide_append(path, MAX_PATH_CHARS, SLASH_D3D9_DLL);
   return pLoadLibraryW(path);
 }
@@ -467,8 +491,7 @@ static HMODULE load_remix_bridge(void) {
   static const WCHAR REMIX_BRIDGE_NAME[] = { '\\','d','3','d','9','-','r','e','m','i','x','.','d','l','l',0 };
   WCHAR path[MAX_PATH_CHARS];
   path[0] = 0;
-  if (!ensure_kernel_functions()) return NULL;
-  if (!pGetModuleFileNameW((HMODULE)g_self_module, path, MAX_PATH_CHARS)) return NULL;
+  if (!get_module_file_name_checked((HMODULE)g_self_module, path, MAX_PATH_CHARS)) return NULL;
   directory_from_path(path);
   wide_append(path, MAX_PATH_CHARS, REMIX_BRIDGE_NAME);
   return pLoadLibraryW(path);
@@ -546,6 +569,7 @@ static FARPROC resolve_export_entry(EXPORT_CACHE* entry) {
     }
   }
 
+  if (!proc) proc = (FARPROC)MissingExportFailure_stub;
   entry->proc = proc;
   return proc;
 }
@@ -570,12 +594,25 @@ void* ResolveExportByOrdinal(unsigned int ordinal) {
   return NULL;
 }
 
+static void __attribute__((used)) RaiseMissingExport(void) {
+  if (ensure_kernel_functions() && pRaiseException) {
+    pRaiseException(0xC0000139, 0, 0, NULL);
+  }
+}
+
+__attribute__((naked)) void MissingExportFailure_stub(void) {
+  __asm__("call _RaiseMissingExport\n\t"
+          "ud2\n");
+}
+
 #define EXPORT_STUB(fn) \
   const char fn##_name[] = #fn; \
   __attribute__((naked)) void fn##_stub(void) { \
     __asm__("pushl $_" #fn "_name\n\t" \
             "call _ResolveExportByName\n\t" \
             "addl $4, %esp\n\t" \
+            "testl %eax, %eax\n\t" \
+            "jz _MissingExportFailure_stub\n\t" \
             "jmp *%eax\n"); \
   }
 
@@ -584,6 +621,8 @@ void* ResolveExportByOrdinal(unsigned int ordinal) {
     __asm__("pushl $" #ord "\n\t" \
             "call _ResolveExportByOrdinal\n\t" \
             "addl $4, %esp\n\t" \
+            "testl %eax, %eax\n\t" \
+            "jz _MissingExportFailure_stub\n\t" \
             "jmp *%eax\n"); \
   }
 
