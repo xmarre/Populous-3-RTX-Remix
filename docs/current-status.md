@@ -1,8 +1,25 @@
 # Current Status
 
-RTX Remix hooks Populous 3 through the Multiverse Launcher Direct3D9 renderer path and the Remix overlay opens.
+The package now includes source for a D3D9 selector shim so RTX Remix is not loaded by `MultiverseLauncher.exe`.
 
-The active blocker is renderer compatibility:
+Expected process routing:
+
+```text
+MultiverseLauncher.exe -> system d3d9.dll
+popTBM.exe             -> d3d9-remix.dll -> .trex runtime
+D3DPopTB.exe           -> d3d9-remix.dll -> .trex runtime
+popTB.exe              -> d3d9-remix.dll -> .trex runtime
+```
+
+Install requirement:
+
+```text
+<game>\d3d9.dll          selector shim built from this repo
+<game>\d3d9-remix.dll    NVIDIA RTX Remix root bridge d3d9.dll, renamed
+<game>\.trex\            NVIDIA RTX Remix runtime folder
+```
+
+The remaining known blocker is renderer compatibility, not launcher hook selection:
 
 ```text
 [RTX-Compatibility-Info] Skipped drawcall, using pre-transformed vertices which isn't currently supported.
@@ -10,6 +27,4 @@ The active blocker is renderer compatibility:
 [RTX] CameraManager: rejected an invalid camera
 ```
 
-This means Remix is not receiving a usable world-space 3D scene/camera. Visual RTX settings therefore do not materially change the game scene.
-
-The next useful work is finding a renderer path that avoids pre-transformed vertices and exposes a valid camera/projection state to RTX Remix.
+That means Remix is not receiving a usable world-space 3D scene/camera from the current renderer path. Visual RTX settings therefore may still not materially change the game scene.

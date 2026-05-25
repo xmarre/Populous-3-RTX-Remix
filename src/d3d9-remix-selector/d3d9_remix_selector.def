@@ -1,0 +1,25 @@
+LIBRARY d3d9
+EXPORTS
+Ordinal16=Ordinal16_stub @16 NONAME
+Ordinal17=Ordinal17_stub @17 NONAME
+Ordinal18=Ordinal18_stub @18 NONAME
+Ordinal19=Ordinal19_stub @19 NONAME
+Direct3DCreate9On12=Direct3DCreate9On12_stub @20
+Direct3DCreate9On12Ex=Direct3DCreate9On12Ex_stub @21
+Ordinal22=Ordinal22_stub @22 NONAME
+Ordinal23=Ordinal23_stub @23 NONAME
+Direct3DShaderValidatorCreate9=Direct3DShaderValidatorCreate9_stub @24
+PSGPError=PSGPError_stub @25
+PSGPSampleTexture=PSGPSampleTexture_stub @26
+D3DPERF_BeginEvent=D3DPERF_BeginEvent_stub @27
+D3DPERF_EndEvent=D3DPERF_EndEvent_stub @28
+D3DPERF_GetStatus=D3DPERF_GetStatus_stub @29
+D3DPERF_QueryRepeatFrame=D3DPERF_QueryRepeatFrame_stub @30
+D3DPERF_SetMarker=D3DPERF_SetMarker_stub @31
+D3DPERF_SetOptions=D3DPERF_SetOptions_stub @32
+D3DPERF_SetRegion=D3DPERF_SetRegion_stub @33
+DebugSetLevel=DebugSetLevel_stub @34
+DebugSetMute=DebugSetMute_stub @35
+Direct3D9EnableMaximizedWindowedModeShim=Direct3D9EnableMaximizedWindowedModeShim_stub @36
+Direct3DCreate9=Direct3DCreate9_stub @37
+Direct3DCreate9Ex=Direct3DCreate9Ex_stub @38

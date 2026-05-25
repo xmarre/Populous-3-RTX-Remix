@@ -1,5 +1,6 @@
-# RTX Remix Runtime binaries - download separately from NVIDIA
+# Local selector shim build output and NVIDIA runtime binaries are not committed.
 /d3d9.dll
+/d3d9-remix.dll
 /.trex/
 
 # Populous game files / executables
