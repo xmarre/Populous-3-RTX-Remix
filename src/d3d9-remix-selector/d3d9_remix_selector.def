@@ -14,8 +14,8 @@ D3DPERF_SetOptions_ord9=D3DPERF_SetOptions_stub @9 NONAME
 D3DPERF_SetRegion_ord10=D3DPERF_SetRegion_stub @10 NONAME
 DebugSetLevel_ord11=DebugSetLevel_stub @11 NONAME
 DebugSetMute_ord12=DebugSetMute_stub @12 NONAME
-Direct3DCreate9_ord13=Direct3DCreate9_stub @13 NONAME
-Direct3DCreate9Ex_ord14=Direct3DCreate9Ex_stub @14 NONAME
+Direct3DCreate9_ord13=Direct3DCreate9_proxy @13 NONAME
+Direct3DCreate9Ex_ord14=Direct3DCreate9Ex_proxy @14 NONAME
 
 ; Current Windows D3D9 export ordinal range, including D3D9On12 additions.
 Ordinal16=Ordinal16_stub @16 NONAME
@@ -39,5 +39,5 @@ D3DPERF_SetRegion=D3DPERF_SetRegion_stub @33
 DebugSetLevel=DebugSetLevel_stub @34
 DebugSetMute=DebugSetMute_stub @35
 Direct3D9EnableMaximizedWindowedModeShim=Direct3D9EnableMaximizedWindowedModeShim_stub @36
-Direct3DCreate9=Direct3DCreate9_stub @37
-Direct3DCreate9Ex=Direct3DCreate9Ex_stub @38
+Direct3DCreate9=Direct3DCreate9_proxy @37
+Direct3DCreate9Ex=Direct3DCreate9Ex_proxy @38

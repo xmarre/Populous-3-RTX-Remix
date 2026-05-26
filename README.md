@@ -23,7 +23,8 @@ D:\Spiele\Populous 3\rtx-remix\mods\
 Runtime behavior:
 
 - `MultiverseLauncher.exe` gets the real system `d3d9.dll`.
-- `popTBM.exe`, `D3DPopTB.exe`, and `popTB.exe` get `d3d9-remix.dll`, which is the renamed NVIDIA RTX Remix bridge.
+- `popTBM.exe` gets system D3D9 for its first D3D9 create call, then `d3d9-remix.dll` for later create calls. This avoids the observed crash when the Multiverse build tears down its startup D3D9 object while entering the menu.
+- `D3DPopTB.exe` and `popTB.exe` get `d3d9-remix.dll`, which is the renamed NVIDIA RTX Remix bridge.
 - If `d3d9-remix.dll` is missing, the selector falls back to the system `d3d9.dll` instead of crashing the launcher.
 
 ## Install
@@ -71,11 +72,11 @@ width=800
 
 The Multiverse Launcher FAQ documents DirectX 9 as the relevant renderer dependency and suggests switching renderer mode only as a workaround for DirectX 9 startup failure. For RTX Remix testing, keep the Direct3D9 path enabled.
 
-## Current renderer blocker
+## Current D3D9 fixup
 
-The hook problem is separate from the renderer-compatibility problem.
+The hook problem is separate from the renderer-state problem.
 
-RTX Remix can load into the game process, but the current Multiverse `direct3d9` renderer path appears to expose pre-transformed/screen-space draw calls instead of a Remix-useful world-space 3D scene.
+RTX Remix can load into the game process, but the Multiverse `direct3d9` renderer path has been observed to expose pre-transformed/screen-space draw calls instead of a normal fixed-function world/view/projection path.
 
 Observed runtime messages:
 
@@ -85,7 +86,7 @@ Observed runtime messages:
 [RTX] CameraManager: rejected an invalid camera
 ```
 
-Result: the RTX Remix UI can work, but ray tracing may still not materially affect the game scene until a renderer path exposes valid camera/projection/world-space geometry.
+The root `d3d9.dll` selector now includes a Populous-specific D3D9 proxy. In game processes it wraps the D3D9 device and rewrites `D3DFVF_XYZRHW` draw state into a synthetic fixed-function orthographic camera path before the call reaches RTX Remix. See `docs/d3d9-rhw-fixup.md`.
 
 ## Runtime log checks
 
@@ -118,7 +119,7 @@ The selector source is in:
 src/d3d9-remix-selector/
 ```
 
-It exports the normal D3D9 entry points and forwards them at runtime based on the current process name.
+It exports the normal D3D9 entry points, forwards them at runtime based on the current process name, and wraps the game D3D9 device to fix RHW/pre-transformed FVF draw state before Remix sees it.
 
 ## Files intentionally not included
 

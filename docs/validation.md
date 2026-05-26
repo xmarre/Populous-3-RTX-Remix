@@ -103,3 +103,39 @@ Install checklist:
 ```
 
 Not validated here: live Windows runtime behavior with Multiverse Launcher, because the container cannot run Windows executables.
+
+## Current source validation note
+
+This branch changes the selector source and export manifest, but the attached
+patches did not include binary patch data for the root `d3d9.dll`. The local
+environment also does not provide `clang`, `lld-link`, or `i686-w64-mingw32-gcc`,
+so the committed selector DLL could not be regenerated here. Rebuild
+`d3d9.dll` with the commands above before packaging or runtime testing.
+
+Do not package this branch as a runtime-ready release until the root
+`d3d9.dll` has been rebuilt from the current source and the checks below have
+been repeated against that rebuilt DLL.
+
+Static routing audit for the current source:
+
+| Process | First `Direct3DCreate9` / `Direct3DCreate9Ex` | Later create calls | Wrapped for RHW fixup |
+| --- | --- | --- | --- |
+| `MultiverseLauncher.exe` | system D3D9 | system D3D9 | no |
+| `popTBM.exe` | system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+| `D3DPopTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+| `popTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+
+The create entry points call `select_d3d9_for_create()` directly instead of the
+generic export cache. That preserves the `popTBM.exe` first-create deferral and
+prevents a first system-D3D9 resolution from pinning later create calls to the
+system DLL. If Remix is missing or the selected module cannot provide the create
+export, the fallback path resolves system D3D9 and returns it unwrapped.
+
+Required runtime release checks after rebuilding:
+
+1. Start `MultiverseLauncher.exe` and confirm it loads system D3D9, not Remix.
+2. Start `popTBM.exe` and confirm the first D3D9 create uses system D3D9.
+3. Confirm the next `popTBM.exe` D3D9 create uses `d3d9-remix.dll` and returns a wrapped D3D9 object.
+4. Confirm `D3DPopTB.exe` and `popTB.exe` create calls use `d3d9-remix.dll` and return wrapped D3D9 objects.
+5. Temporarily remove or rename `d3d9-remix.dll` and confirm all game create calls fall back to unwrapped system D3D9.
+6. In the Multiverse `direct3d9` renderer path, confirm RHW/pre-transformed draw warnings are reduced or identify the next interception point.
