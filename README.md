@@ -24,7 +24,7 @@ D:\Spiele\Populous 3\rtx-remix\mods\
 Runtime behavior:
 
 - `MultiverseLauncher.exe` gets the real system `d3d9.dll`.
-- `popTBM.exe` gets system D3D9 for its first three D3D9 create calls by default, then `d3d9-remix.dll` for later create calls. This keeps Remix out of Multiverse startup/movie devices that are torn down before the real game/menu device. The count is configurable in `d3d9-selector.ini`.
+- `popTBM.exe` gets system D3D9 for its first four D3D9 create calls by default, then `d3d9-remix.dll` for later create calls. This keeps Remix out of Multiverse startup/movie/final-blit devices that are torn down before the stable gameplay device. The count is configurable in `d3d9-selector.ini`.
 - `D3DPopTB.exe` and `popTB.exe` get `d3d9-remix.dll`, which is the renamed NVIDIA RTX Remix bridge.
 - If `d3d9-remix.dll` is missing, the selector falls back to the system `d3d9.dll` instead of crashing the launcher.
 
@@ -76,16 +76,16 @@ The Multiverse Launcher FAQ documents DirectX 9 as the relevant renderer depende
 
 ## Startup-device defer setting
 
-`popTBM.exe` creates short-lived D3D9 objects before the actual menu/game renderer is stable. RTX Remix has been observed to crash when attached to those temporary devices during teardown. The selector therefore keeps Remix out of the first three `popTBM.exe` `Direct3DCreate9` / `Direct3DCreate9Ex` calls by default.
+`popTBM.exe` creates short-lived D3D9 objects before the actual menu/game renderer is stable. RTX Remix has been observed to crash when attached to those temporary devices during teardown, and the latest trace showed call 4 is still a screen-space final-blit path. The selector therefore keeps Remix out of the first four `popTBM.exe` `Direct3DCreate9` / `Direct3DCreate9Ex` calls by default.
 
 Config file:
 
 ```ini
 [popTBM]
-deferCreates=3
+deferCreates=4
 ```
 
-Values below `2` are promoted to `2`; values above `16` are clamped to `16`. Use `4` if the selector log still shows Remix attached before gameplay.
+Values below `2` are promoted to `2`; values above `16` are clamped to `16`. Increase this value if the selector log still shows Remix attached before gameplay.
 
 ## Current D3D9 fixup
 
@@ -167,11 +167,14 @@ Default `d3d9-selector.ini` now uses:
 
 ```ini
 [popTBM]
-deferCreates=3
+deferCreates=4
 forceWindowedForRemix=1
-enableRhwFixup=1
-forceAutoDepthStencilForRemix=1
+enableRhwFixup=0
+forceAutoDepthStencilForRemix=0
 promoteSystemDeviceWithAutoDepth=1
+traceD3D9Stream=1
+traceRenderStates=0
+traceDrawLimit=2048
 ```
 
 The selector writes `d3d9-selector.log` next to `d3d9.dll`. If the game still crashes, check whether the log shows `backend=remix` before the gameplay device. Increase `deferCreates` by one if Remix is still attached to the menu device.

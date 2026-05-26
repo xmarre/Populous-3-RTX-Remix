@@ -621,13 +621,30 @@ static void log_start_session_once(void) {
   WCHAR path[MAX_PATH_CHARS];
   HANDLE h;
   DWORD written = 0;
-  if (__sync_lock_test_and_set(&g_log_session_started, 1)) return;
-  if (!ensure_kernel_functions() || !pCreateFileW || !pWriteFile || !pCloseHandle) return;
-  if (!get_selector_log_path(path, MAX_PATH_CHARS)) return;
+  BOOL wrote;
+  BOOL closed;
+  if (g_log_session_started == 2) return;
+  if (!__sync_bool_compare_and_swap(&g_log_session_started, 0, 1)) return;
+  if (!ensure_kernel_functions() || !pCreateFileW || !pWriteFile || !pCloseHandle) {
+    __sync_lock_release(&g_log_session_started);
+    return;
+  }
+  if (!get_selector_log_path(path, MAX_PATH_CHARS)) {
+    __sync_lock_release(&g_log_session_started);
+    return;
+  }
   h = pCreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-  if (!h || h == INVALID_HANDLE_VALUE_LOCAL) return;
-  pWriteFile(h, HEADER, (DWORD)(sizeof(HEADER) - 1), &written, NULL);
-  pCloseHandle(h);
+  if (!h || h == INVALID_HANDLE_VALUE_LOCAL) {
+    __sync_lock_release(&g_log_session_started);
+    return;
+  }
+  wrote = pWriteFile(h, HEADER, (DWORD)(sizeof(HEADER) - 1), &written, NULL);
+  closed = pCloseHandle(h);
+  if (wrote && written == (DWORD)(sizeof(HEADER) - 1) && closed) {
+    __sync_lock_test_and_set(&g_log_session_started, 2);
+  } else {
+    __sync_lock_release(&g_log_session_started);
+  }
 }
 
 static void log_write_raw(const char* text, unsigned int len) {
@@ -2326,7 +2343,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitive(DeviceProxy*
 static HRESULT __attribute__((stdcall)) Device_DrawPrimitiveUP(DeviceProxy* self, UINT PrimitiveType, UINT PrimitiveCount, const void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,const void*,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,const void*,UINT))vt[83] : NULL;
-  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, classify_rhw_draw(self, PrimitiveType, PrimitiveCount), PrimitiveType, PrimitiveCount, VertexStreamZeroStride);
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, classify_rhw_draw(self, PrimitiveType, PrimitiveCount), PrimitiveType, PrimitiveCount, device_rhw_state_bits(self));
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride) : E_POINTER;
 }
@@ -2334,7 +2351,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawPrimitiveUP(DeviceProxy* self
 static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitiveUP(DeviceProxy* self, UINT PrimitiveType, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, const void* pIndexData, UINT IndexDataFormat, const void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,UINT,UINT,const void*,UINT,const void*,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,UINT,UINT,const void*,UINT,const void*,UINT))vt[84] : NULL;
-  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitiveUP_RHW", PrimitiveType, PrimitiveCount, VertexStreamZeroStride);
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitiveUP_RHW", PrimitiveType, PrimitiveCount, device_rhw_state_bits(self));
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData, IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride) : E_POINTER;
 }
