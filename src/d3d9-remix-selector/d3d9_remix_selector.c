@@ -41,6 +41,7 @@ typedef HMODULE (__attribute__((stdcall)) *PFN_LoadLibraryW)(LPCWSTR);
 typedef FARPROC (__attribute__((stdcall)) *PFN_GetProcAddress)(HMODULE, LPCSTR);
 typedef DWORD   (__attribute__((stdcall)) *PFN_GetModuleFileNameW)(HMODULE, LPWSTR, DWORD);
 typedef UINT    (__attribute__((stdcall)) *PFN_GetSystemDirectoryW)(LPWSTR, UINT);
+typedef UINT    (__attribute__((stdcall)) *PFN_GetPrivateProfileIntW)(LPCWSTR, LPCWSTR, UINT, LPCWSTR);
 typedef void    (__attribute__((stdcall)) *PFN_RaiseException)(DWORD, DWORD, DWORD, const PVOID*);
 
 typedef struct LIST_ENTRY_ {
@@ -186,7 +187,9 @@ static PFN_LoadLibraryW pLoadLibraryW = NULL;
 static PFN_GetProcAddress pGetProcAddress = NULL;
 static PFN_GetModuleFileNameW pGetModuleFileNameW = NULL;
 static PFN_GetSystemDirectoryW pGetSystemDirectoryW = NULL;
+static PFN_GetPrivateProfileIntW pGetPrivateProfileIntW = NULL;
 static PFN_RaiseException pRaiseException = NULL;
+static unsigned int g_last_selected_create_call = 0;
 
 void MissingExportFailure_stub(void);
 
@@ -382,7 +385,7 @@ static int ensure_kernel_functions(void) {
   HMODULE k32;
   HMODULE kb;
 
-  if (pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pRaiseException) return 1;
+  if (pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pGetPrivateProfileIntW && pRaiseException) return 1;
 
   k32 = find_loaded_module_w(KERNEL32_DLL);
   kb = find_loaded_module_w(KERNELBASE_DLL);
@@ -402,6 +405,10 @@ static int ensure_kernel_functions(void) {
   if (!pGetSystemDirectoryW) {
     pGetSystemDirectoryW = (PFN_GetSystemDirectoryW)resolve_export(k32, "GetSystemDirectoryW");
     if (!pGetSystemDirectoryW) pGetSystemDirectoryW = (PFN_GetSystemDirectoryW)resolve_export(kb, "GetSystemDirectoryW");
+  }
+  if (!pGetPrivateProfileIntW) {
+    pGetPrivateProfileIntW = (PFN_GetPrivateProfileIntW)resolve_export(k32, "GetPrivateProfileIntW");
+    if (!pGetPrivateProfileIntW) pGetPrivateProfileIntW = (PFN_GetPrivateProfileIntW)resolve_export(kb, "GetPrivateProfileIntW");
   }
   if (!pRaiseException) {
     pRaiseException = (PFN_RaiseException)resolve_export(k32, "RaiseException");
@@ -563,6 +570,34 @@ static HMODULE ensure_remix_d3d9(void) {
   return mod;
 }
 
+
+static int get_selector_ini_path(WCHAR* path, DWORD cap) {
+  static const WCHAR INI_NAME[] = { '\\','d','3','d','9','-','s','e','l','e','c','t','o','r','.','i','n','i',0 };
+  if (!path || cap < 2) return 0;
+  path[0] = 0;
+  if (!get_module_file_name_checked((HMODULE)g_self_module, path, cap)) return 0;
+  directory_from_path(path);
+  wide_append(path, cap, INI_NAME);
+  return path[0] != 0;
+}
+
+static UINT read_selector_ini_uint(const WCHAR* section, const WCHAR* key, UINT fallback, UINT max_value) {
+  WCHAR path[MAX_PATH_CHARS];
+  UINT value;
+  if (!ensure_kernel_functions() || !pGetPrivateProfileIntW) return fallback;
+  if (!get_selector_ini_path(path, MAX_PATH_CHARS)) return fallback;
+  value = pGetPrivateProfileIntW(section, key, fallback, path);
+  if (value > max_value) value = max_value;
+  return value;
+}
+
+static UINT multiverse_defer_create_count(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 'd','e','f','e','r','C','r','e','a','t','e','s',0 };
+  UINT value = read_selector_ini_uint(SECTION, KEY, 2, 16);
+  return value < 2 ? 2 : value;
+}
+
 static HMODULE ensure_real_d3d9(void) {
   HMODULE mod;
   int remix_active;
@@ -598,9 +633,10 @@ static HMODULE select_d3d9_for_create(void) {
 
   lock_proxy_state();
   create_call = ++g_direct3d_create_calls;
+  g_last_selected_create_call = create_call;
   unlock_proxy_state();
 
-  if (is_multiverse_game && create_call == 1) {
+  if (is_multiverse_game && create_call <= multiverse_defer_create_count()) {
     return ensure_system_d3d9();
   }
 
@@ -863,6 +899,7 @@ typedef struct D3D9Proxy_ {
   void* real;
   DWORD magic;
   int is_ex;
+  unsigned int create_call_index;
 } D3D9Proxy;
 
 typedef struct DeviceProxy_ {
@@ -881,6 +918,7 @@ typedef struct DeviceProxy_ {
   D3DVIEWPORT9 viewport;
   IDirect3DVertexDeclaration9* rhw_decl;
   DWORD rhw_decl_fvf;
+  unsigned int create_call_index;
 } DeviceProxy;
 
 static D3D9Proxy g_d3d9_proxy_pool[MAX_D3D9_PROXIES];
@@ -1110,6 +1148,7 @@ static D3D9Proxy* wrap_d3d9_object(void* real, int is_ex) {
       g_d3d9_proxy_pool[i].real = real;
       g_d3d9_proxy_pool[i].magic = PROXY_MAGIC_D3D9;
       g_d3d9_proxy_pool[i].is_ex = is_ex;
+      g_d3d9_proxy_pool[i].create_call_index = g_last_selected_create_call;
       wrapped = &g_d3d9_proxy_pool[i];
       break;
     }
@@ -1147,6 +1186,7 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
       d->viewport.MaxZ = 1.0f;
       d->rhw_decl = NULL;
       d->rhw_decl_fvf = 0;
+      d->create_call_index = parent ? parent->create_call_index : g_last_selected_create_call;
       update_device_size_from_pp(d, pp);
       d->viewport.Width = d->bb_width;
       d->viewport.Height = d->bb_height;
@@ -1318,6 +1358,7 @@ static ULONG __attribute__((stdcall)) D3D9_Release(D3D9Proxy* self) {
     self->lpVtbl = NULL;
     self->magic = 0;
     self->is_ex = 0;
+    self->create_call_index = 0;
     unlock_proxy_state();
   }
   return refs;
@@ -1413,14 +1454,27 @@ static ULONG __attribute__((stdcall)) Device_AddRef(DeviceProxy* self) {
 }
 
 static ULONG __attribute__((stdcall)) Device_Release(DeviceProxy* self) {
+  ULONG refs_before;
   ULONG refs;
-  if (!self) return 0;
+  if (!self || !self->real) return 0;
+
+  /*
+   * Release selector-owned device children before the underlying device reaches
+   * refcount zero. Releasing the synthetic vertex declaration after the bridge
+   * has already destroyed the device can enqueue late resource-destroy commands
+   * into the 64-bit server while it is tearing the D3D9 module down.
+   */
+  refs_before = call_addref(self->real);
+  refs_before = call_release(self->real);
+  if (refs_before <= 1 && self->rhw_decl) {
+    call_set_vertex_declaration(self->real, NULL);
+    call_release(self->rhw_decl);
+    self->rhw_decl = NULL;
+    self->rhw_decl_fvf = 0;
+  }
 
   refs = call_release(self->real);
   if (refs == 0) {
-    if (self->rhw_decl) {
-      call_release(self->rhw_decl);
-    }
     lock_proxy_state();
     self->real = NULL;
     self->lpVtbl = NULL;
@@ -1434,6 +1488,7 @@ static ULONG __attribute__((stdcall)) Device_Release(DeviceProxy* self) {
     self->vertex_shader_active = 0;
     self->rhw_decl = NULL;
     self->rhw_decl_fvf = 0;
+    self->create_call_index = 0;
     unlock_proxy_state();
   }
   return refs;
