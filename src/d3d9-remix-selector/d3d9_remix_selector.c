@@ -594,7 +594,8 @@ static UINT read_selector_ini_uint(const WCHAR* section, const WCHAR* key, UINT 
 static UINT multiverse_defer_create_count(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'd','e','f','e','r','C','r','e','a','t','e','s',0 };
-  return read_selector_ini_uint(SECTION, KEY, 2, 16);
+  UINT value = read_selector_ini_uint(SECTION, KEY, 2, 16);
+  return value < 2 ? 2 : value;
 }
 
 static HMODULE ensure_real_d3d9(void) {

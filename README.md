@@ -85,7 +85,7 @@ Config file:
 deferCreates=2
 ```
 
-Use `3` if the intro video still crashes before the menu. Use `1` only if Remix no longer loads after reaching gameplay.
+Values below `2` are promoted to `2`. Use `3` if the intro video still crashes before the menu.
 
 ## Current D3D9 fixup
 

@@ -107,7 +107,7 @@ The selector DLL has no import table. It resolves `kernel32`/`kernelbase` export
 SHA-256 of the included selector:
 
 ```text
-f10086ccd6fdf5f5f5498356ba533683fcb50abf9d619507276739b0f7ca5b82  d3d9.dll
+9b26d683292a5055759db7196359d08d499e163068372b08b8aba7908facbc26  d3d9.dll
 ```
 
 ## Selector binary included
@@ -139,7 +139,7 @@ Static routing audit for the current source:
 | Process | Startup `Direct3DCreate9` / `Direct3DCreate9Ex` calls | Later create calls | Wrapped for RHW fixup |
 | --- | --- | --- | --- |
 | `MultiverseLauncher.exe` | system D3D9 | system D3D9 | no |
-| `popTBM.exe` | system D3D9 while `create_call <= [popTBM] deferCreates` | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+| `popTBM.exe` | system D3D9 while `create_call <= [popTBM] deferCreates`, clamped to 2-16 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
 | `D3DPopTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
 | `popTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
 
@@ -153,7 +153,9 @@ Static concurrency audit for the current source:
 
 - `select_d3d9_for_create()` snapshots the process classification, increments
   `g_direct3d_create_calls` while holding the selector spin lock, and uses the
-  local increment result for the `popTBM.exe` defer-count decision.
+  local increment result for the `popTBM.exe` defer-count decision. The
+  configured defer count is clamped to 2-16 so `0` or `1` cannot re-enable the
+  unstable startup-device path.
 - `g_remix_active`, `g_real_d3d9`, `g_system_d3d9`, and `g_remix_d3d9` are read
   and written while holding the same lock; DLL loads happen outside the lock,
   then the selected module pointer is published under the lock.
