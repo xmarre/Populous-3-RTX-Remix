@@ -6,7 +6,7 @@ Expected process routing:
 
 ```text
 MultiverseLauncher.exe -> system d3d9.dll
-popTBM.exe             -> d3d9-remix.dll -> .trex runtime
+popTBM.exe             -> defers Remix on first create: system d3d9.dll; later creates: d3d9-remix.dll -> .trex runtime
 D3DPopTB.exe           -> d3d9-remix.dll -> .trex runtime
 popTB.exe              -> d3d9-remix.dll -> .trex runtime
 ```

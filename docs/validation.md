@@ -107,7 +107,7 @@ The selector DLL has no import table. It resolves `kernel32`/`kernelbase` export
 SHA-256 of the included selector:
 
 ```text
-688b0e8157a4d5aaaeaac319fd8e1008ae2dc7125f2eccdaa5a03aa0217307bd  d3d9.dll
+996ceb17a185fd2221703a073183044071ff7c61373f4e34dad977c58c7f202a  d3d9.dll
 ```
 
 ## Selector binary included
@@ -128,7 +128,8 @@ Not validated here: live Windows runtime behavior with Multiverse Launcher, beca
 
 This branch changes the selector source and export manifest. The root
 `d3d9.dll` has been rebuilt from that source with the portable Zig command
-above.
+above after the review fixes in this branch. Re-running that command from the
+current tree produced the hash recorded above.
 
 Do not package this branch as a runtime-ready release until the checks below
 have been repeated against the rebuilt DLL in the target game environment.
@@ -147,6 +148,19 @@ generic export cache. That preserves the `popTBM.exe` first-create deferral and
 prevents a first system-D3D9 resolution from pinning later create calls to the
 system DLL. If Remix is missing or the selected module cannot provide the create
 export, the fallback path resolves system D3D9 and returns it unwrapped.
+
+Static concurrency audit for the current source:
+
+- `select_d3d9_for_create()` snapshots the process classification, increments
+  `g_direct3d_create_calls` while holding the selector spin lock, and uses the
+  local increment result for the `popTBM.exe` first-create decision.
+- `g_remix_active`, `g_real_d3d9`, `g_system_d3d9`, and `g_remix_d3d9` are read
+  and written while holding the same lock; DLL loads happen outside the lock,
+  then the selected module pointer is published under the lock.
+- `D3D9_Release()` clears its proxy slot when the forwarded COM `Release`
+  returns zero.
+- `Device_Release()` releases the cached RHW vertex declaration and clears its
+  proxy slot when the forwarded COM `Release` returns zero.
 
 Required runtime release checks:
 

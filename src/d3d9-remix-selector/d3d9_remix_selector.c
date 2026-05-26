@@ -181,6 +181,7 @@ static HMODULE g_remix_d3d9 = NULL;
 static HMODULE g_system_d3d9 = NULL;
 static unsigned int g_direct3d_create_calls = 0;
 static int g_remix_active = 0;
+static volatile long g_proxy_state_lock = 0;
 static PFN_LoadLibraryW pLoadLibraryW = NULL;
 static PFN_GetProcAddress pGetProcAddress = NULL;
 static PFN_GetModuleFileNameW pGetModuleFileNameW = NULL;
@@ -188,6 +189,17 @@ static PFN_GetSystemDirectoryW pGetSystemDirectoryW = NULL;
 static PFN_RaiseException pRaiseException = NULL;
 
 void MissingExportFailure_stub(void);
+
+static void lock_proxy_state(void) {
+  while (__sync_lock_test_and_set(&g_proxy_state_lock, 1)) {
+    while (g_proxy_state_lock) {
+    }
+  }
+}
+
+static void unlock_proxy_state(void) {
+  __sync_lock_release(&g_proxy_state_lock);
+}
 
 static PEB* get_peb(void) {
   PEB* peb;
@@ -508,10 +520,19 @@ static HMODULE load_system_d3d9(void) {
 }
 
 static HMODULE ensure_system_d3d9(void) {
-  HMODULE mod = g_system_d3d9;
+  HMODULE mod;
+
+  lock_proxy_state();
+  mod = g_system_d3d9;
+  unlock_proxy_state();
   if (mod) return mod;
+
   mod = load_system_d3d9();
-  g_system_d3d9 = mod;
+
+  lock_proxy_state();
+  if (!g_system_d3d9) g_system_d3d9 = mod;
+  mod = g_system_d3d9;
+  unlock_proxy_state();
   return mod;
 }
 
@@ -526,18 +547,33 @@ static HMODULE load_remix_bridge(void) {
 }
 
 static HMODULE ensure_remix_d3d9(void) {
-  HMODULE mod = g_remix_d3d9;
+  HMODULE mod;
+
+  lock_proxy_state();
+  mod = g_remix_d3d9;
+  unlock_proxy_state();
   if (mod) return mod;
+
   mod = load_remix_bridge();
-  g_remix_d3d9 = mod;
+
+  lock_proxy_state();
+  if (!g_remix_d3d9) g_remix_d3d9 = mod;
+  mod = g_remix_d3d9;
+  unlock_proxy_state();
   return mod;
 }
 
 static HMODULE ensure_real_d3d9(void) {
-  HMODULE mod = g_real_d3d9;
+  HMODULE mod;
+  int remix_active;
+
+  lock_proxy_state();
+  mod = g_real_d3d9;
+  remix_active = g_remix_active;
+  unlock_proxy_state();
   if (mod) return mod;
 
-  if (is_game_process() && g_remix_active) {
+  if (is_game_process() && remix_active) {
     mod = ensure_remix_d3d9();
     if (!mod) mod = ensure_system_d3d9();
   } else if (is_game_process() && !is_multiverse_game_process()) {
@@ -547,24 +583,34 @@ static HMODULE ensure_real_d3d9(void) {
     mod = ensure_system_d3d9();
   }
 
-  g_real_d3d9 = mod;
+  lock_proxy_state();
+  if (!g_real_d3d9 || mod == g_remix_d3d9) g_real_d3d9 = mod;
+  mod = g_real_d3d9;
+  unlock_proxy_state();
   return mod;
 }
 
 static HMODULE select_d3d9_for_create(void) {
   HMODULE mod;
+  unsigned int create_call;
+  int is_multiverse_game = is_multiverse_game_process();
+  int is_game = is_game_process();
 
-  ++g_direct3d_create_calls;
+  lock_proxy_state();
+  create_call = ++g_direct3d_create_calls;
+  unlock_proxy_state();
 
-  if (is_multiverse_game_process() && g_direct3d_create_calls == 1) {
+  if (is_multiverse_game && create_call == 1) {
     return ensure_system_d3d9();
   }
 
-  if (is_game_process()) {
+  if (is_game) {
     mod = ensure_remix_d3d9();
     if (mod) {
+      lock_proxy_state();
       g_remix_active = 1;
       g_real_d3d9 = mod;
+      unlock_proxy_state();
       return mod;
     }
   }
@@ -1054,22 +1100,30 @@ static void apply_rhw_state_for_draw(DeviceProxy* self) {
 
 static D3D9Proxy* wrap_d3d9_object(void* real, int is_ex) {
   unsigned int i;
+  D3D9Proxy* wrapped = NULL;
   if (!real) return NULL;
+
+  lock_proxy_state();
   for (i = 0; i < MAX_D3D9_PROXIES; ++i) {
     if (!g_d3d9_proxy_pool[i].real) {
       g_d3d9_proxy_pool[i].lpVtbl = g_d3d9_vtbl;
       g_d3d9_proxy_pool[i].real = real;
       g_d3d9_proxy_pool[i].magic = PROXY_MAGIC_D3D9;
       g_d3d9_proxy_pool[i].is_ex = is_ex;
-      return &g_d3d9_proxy_pool[i];
+      wrapped = &g_d3d9_proxy_pool[i];
+      break;
     }
   }
-  return NULL;
+  unlock_proxy_state();
+  return wrapped;
 }
 
 static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DPRESENT_PARAMETERS* pp, int is_ex) {
   unsigned int i;
+  DeviceProxy* wrapped = NULL;
   if (!real) return NULL;
+
+  lock_proxy_state();
   for (i = 0; i < MAX_DEVICE_PROXIES; ++i) {
     if (!g_device_proxy_pool[i].real) {
       DeviceProxy* d = &g_device_proxy_pool[i];
@@ -1096,10 +1150,12 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
       update_device_size_from_pp(d, pp);
       d->viewport.Width = d->bb_width;
       d->viewport.Height = d->bb_height;
-      return d;
+      wrapped = d;
+      break;
     }
   }
-  return NULL;
+  unlock_proxy_state();
+  return wrapped;
 }
 
 __attribute__((naked)) void D3D9Forward_3(void) { __asm__("movl 4(%esp), %eax\n\t" "movl 4(%eax), %ecx\n\t" "movl %ecx, 4(%esp)\n\t" "movl (%ecx), %edx\n\t" "jmp *12(%edx)\n"); }
@@ -1252,7 +1308,19 @@ static ULONG __attribute__((stdcall)) D3D9_AddRef(D3D9Proxy* self) {
 }
 
 static ULONG __attribute__((stdcall)) D3D9_Release(D3D9Proxy* self) {
-  return self ? call_release(self->real) : 0;
+  ULONG refs;
+  if (!self) return 0;
+
+  refs = call_release(self->real);
+  if (refs == 0) {
+    lock_proxy_state();
+    self->real = NULL;
+    self->lpVtbl = NULL;
+    self->magic = 0;
+    self->is_ex = 0;
+    unlock_proxy_state();
+  }
+  return refs;
 }
 
 static UINT __attribute__((stdcall)) D3D9_GetAdapterModeCount(D3D9Proxy* self, UINT Adapter, D3DFORMAT Format) {
@@ -1345,7 +1413,30 @@ static ULONG __attribute__((stdcall)) Device_AddRef(DeviceProxy* self) {
 }
 
 static ULONG __attribute__((stdcall)) Device_Release(DeviceProxy* self) {
-  return self ? call_release(self->real) : 0;
+  ULONG refs;
+  if (!self) return 0;
+
+  refs = call_release(self->real);
+  if (refs == 0) {
+    if (self->rhw_decl) {
+      call_release(self->rhw_decl);
+    }
+    lock_proxy_state();
+    self->real = NULL;
+    self->lpVtbl = NULL;
+    self->magic = 0;
+    self->parent = NULL;
+    self->is_ex = 0;
+    self->game_fvf = 0;
+    self->active_fvf = 0;
+    self->rhw_active = 0;
+    self->using_game_decl = 0;
+    self->vertex_shader_active = 0;
+    self->rhw_decl = NULL;
+    self->rhw_decl_fvf = 0;
+    unlock_proxy_state();
+  }
+  return refs;
 }
 
 static HRESULT __attribute__((stdcall)) Device_GetDirect3D(DeviceProxy* self, IDirect3D9** ppD3D9) {
