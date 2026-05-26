@@ -709,7 +709,8 @@ static UINT read_selector_ini_uint(const WCHAR* section, const WCHAR* key, UINT 
 static UINT multiverse_defer_create_count(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'd','e','f','e','r','C','r','e','a','t','e','s',0 };
-  UINT value = read_selector_ini_uint(SECTION, KEY, 3, 32);
+  UINT value = read_selector_ini_uint(SECTION, KEY, 3, 16);
+  if (value < 2) value = 2;
   return value;
 }
 
@@ -1677,13 +1678,13 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
   DeviceProxy* wrapped;
   D3DPRESENT_PARAMETERS forced_pp;
   D3DPRESENT_PARAMETERS* pp_to_use = pPresentationParameters;
+  UINT forced = 0;
   if (!ppReturnedDeviceInterface) return E_POINTER;
   promote_system_proxy_to_remix_for_device(self, pPresentationParameters);
   vt = self && self->real ? *(void***)self->real : NULL;
   fn = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**))vt[16] : NULL;
   if (!fn) return E_POINTER;
 
-  UINT forced = 0;
   if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
     copy_presentation_parameters(&forced_pp, pPresentationParameters);
     make_windowed_presentation(&forced_pp, hFocusWindow);
@@ -1714,13 +1715,13 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UIN
   D3DPRESENT_PARAMETERS forced_pp;
   D3DPRESENT_PARAMETERS* pp_to_use = pPresentationParameters;
   D3DDISPLAYMODEEX* mode_to_use = pFullscreenDisplayMode;
+  UINT forced = 0;
   if (!ppReturnedDeviceInterface) return E_POINTER;
   promote_system_proxy_to_remix_for_device(self, pPresentationParameters);
   vt = self && self->real ? *(void***)self->real : NULL;
   fn = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**))vt[20] : NULL;
   if (!fn) return E_POINTER;
 
-  UINT forced = 0;
   if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
     copy_presentation_parameters(&forced_pp, pPresentationParameters);
     make_windowed_presentation(&forced_pp, hFocusWindow);
