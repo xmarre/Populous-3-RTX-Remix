@@ -598,6 +598,18 @@ static UINT multiverse_defer_create_count(void) {
   return value < 2 ? 2 : value;
 }
 
+static UINT poptbm_force_windowed_for_remix(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 'f','o','r','c','e','W','i','n','d','o','w','e','d','F','o','r','R','e','m','i','x',0 };
+  return read_selector_ini_uint(SECTION, KEY, 1, 1);
+}
+
+static UINT poptbm_enable_rhw_fixup(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 'e','n','a','b','l','e','R','h','w','F','i','x','u','p',0 };
+  return read_selector_ini_uint(SECTION, KEY, 0, 1);
+}
+
 static HMODULE ensure_real_d3d9(void) {
   HMODULE mod;
   int remix_active;
@@ -750,18 +762,20 @@ __attribute__((naked)) void MissingExportFailure_stub(void) {
 
 
 /*
- * Populous D3D9 POSITIONT/RHW fixup layer.
+ * Populous D3D9 compatibility layer.
  *
- * Remix is being loaded correctly, but the Multiverse Direct3D9 path emits
- * transformed vertices (D3DFVF_XYZRHW / POSITIONT-style data). Remix skips
- * those draw calls because there is no fixed-function camera to reconstruct.
+ * Remix is loaded through the renamed NVIDIA bridge only in the real game
+ * process. Multiverse's Direct3D9 renderer creates and tears down multiple
+ * exclusive fullscreen devices around the intro/menu transition. The bridge
+ * log shows this as a successful fullscreen CreateDevice followed immediately
+ * by resource/swapchain/module destruction and a 64-bit bridge access
+ * violation.
  *
- * This proxy wraps the Remix D3D9 object and rewrites RHW FVF state into a
- * fixed-function-compatible vertex declaration that treats the first three
- * floats as POSITION and ignores the RHW float at offset 12. Before affected
- * draws it seeds a stable orthographic world/view/projection transform derived
- * from the current backbuffer/viewport. This is deliberately narrow: it does
- * not touch non-RHW draw calls and it does not route the launcher into Remix.
+ * The root fix here is to keep Remix out of exclusive fullscreen ownership for
+ * popTBM.exe. The D3D9 object is proxied only so CreateDevice/CreateDeviceEx can
+ * pass windowed presentation parameters to the Remix bridge. The experimental
+ * RHW vertex fixup remains compiled in, but is disabled by default because the
+ * current crash occurs before that path is relevant.
  */
 
 #define S_OK 0
@@ -1096,6 +1110,35 @@ static void update_device_viewport(DeviceProxy* self, const D3DVIEWPORT9* vp) {
   if (vp->Height) self->bb_height = vp->Height;
 }
 
+static void copy_presentation_parameters(D3DPRESENT_PARAMETERS* dst, const D3DPRESENT_PARAMETERS* src) {
+  if (!dst || !src) return;
+  dst->BackBufferWidth = src->BackBufferWidth;
+  dst->BackBufferHeight = src->BackBufferHeight;
+  dst->BackBufferFormat = src->BackBufferFormat;
+  dst->BackBufferCount = src->BackBufferCount;
+  dst->MultiSampleType = src->MultiSampleType;
+  dst->MultiSampleQuality = src->MultiSampleQuality;
+  dst->SwapEffect = src->SwapEffect;
+  dst->hDeviceWindow = src->hDeviceWindow;
+  dst->Windowed = src->Windowed;
+  dst->EnableAutoDepthStencil = src->EnableAutoDepthStencil;
+  dst->AutoDepthStencilFormat = src->AutoDepthStencilFormat;
+  dst->Flags = src->Flags;
+  dst->FullScreen_RefreshRateInHz = src->FullScreen_RefreshRateInHz;
+  dst->PresentationInterval = src->PresentationInterval;
+}
+
+static void make_windowed_presentation(D3DPRESENT_PARAMETERS* pp, HWND fallback_window) {
+  if (!pp) return;
+  pp->Windowed = TRUE;
+  pp->FullScreen_RefreshRateInHz = 0;
+  if (!pp->hDeviceWindow && fallback_window) pp->hDeviceWindow = fallback_window;
+}
+
+static int should_force_windowed_for_remix_create(const D3D9Proxy* self) {
+  return self && is_multiverse_game_process() && poptbm_force_windowed_for_remix();
+}
+
 static int ensure_rhw_decl(DeviceProxy* self, DWORD fvf) {
   D3DVERTEXELEMENT9 elems[16];
   IDirect3DVertexDeclaration9* decl = NULL;
@@ -1406,13 +1449,25 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**))vt[16] : NULL;
   HRESULT hr;
   DeviceProxy* wrapped;
+  D3DPRESENT_PARAMETERS forced_pp;
+  D3DPRESENT_PARAMETERS* pp_to_use = pPresentationParameters;
   if (!fn || !ppReturnedDeviceInterface) return E_POINTER;
-  hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pPresentationParameters, &real_dev);
-  if (FAILED(hr) || !real_dev) {
+
+  if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
+    copy_presentation_parameters(&forced_pp, pPresentationParameters);
+    make_windowed_presentation(&forced_pp, hFocusWindow);
+    pp_to_use = &forced_pp;
+  }
+
+  hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, &real_dev);
+  if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
+    copy_presentation_parameters(pPresentationParameters, pp_to_use);
+  }
+  if (FAILED(hr) || !real_dev || !poptbm_enable_rhw_fixup()) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
-  wrapped = wrap_device_object(real_dev, self, pPresentationParameters, 0);
+  wrapped = wrap_device_object(real_dev, self, pp_to_use, 0);
   *ppReturnedDeviceInterface = wrapped ? (IDirect3DDevice9*)wrapped : (IDirect3DDevice9*)real_dev;
   return hr;
 }
@@ -1423,13 +1478,27 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UIN
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**))vt[20] : NULL;
   HRESULT hr;
   DeviceProxy* wrapped;
+  D3DPRESENT_PARAMETERS forced_pp;
+  D3DPRESENT_PARAMETERS* pp_to_use = pPresentationParameters;
+  D3DDISPLAYMODEEX* mode_to_use = pFullscreenDisplayMode;
   if (!fn || !ppReturnedDeviceInterface) return E_POINTER;
-  hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pPresentationParameters, pFullscreenDisplayMode, &real_dev);
-  if (FAILED(hr) || !real_dev) {
+
+  if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
+    copy_presentation_parameters(&forced_pp, pPresentationParameters);
+    make_windowed_presentation(&forced_pp, hFocusWindow);
+    pp_to_use = &forced_pp;
+    mode_to_use = NULL;
+  }
+
+  hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, mode_to_use, &real_dev);
+  if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
+    copy_presentation_parameters(pPresentationParameters, pp_to_use);
+  }
+  if (FAILED(hr) || !real_dev || !poptbm_enable_rhw_fixup()) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
-  wrapped = wrap_device_object(real_dev, self, pPresentationParameters, 1);
+  wrapped = wrap_device_object(real_dev, self, pp_to_use, 1);
   *ppReturnedDeviceInterface = wrapped ? (IDirect3DDevice9*)wrapped : (IDirect3DDevice9*)real_dev;
   return hr;
 }

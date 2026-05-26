@@ -1,32 +1,20 @@
-# Current Status
+# Current status
 
-The package now includes source for a D3D9 selector shim so RTX Remix is not loaded by `MultiverseLauncher.exe`.
+RTX Remix is reaching `popTBM.exe`; the remaining crash in the latest logs is not a launcher-selection failure.
 
-Expected process routing:
+The bridge log shows Remix creating a D3D9Ex device during the black-screen/menu transition, then immediately sending destroy commands for the device, textures, swapchain, and D3D9 module. The 64-bit bridge then raises an access violation.
 
-```text
-MultiverseLauncher.exe -> system d3d9.dll
-popTBM.exe             -> defers Remix on first create: system d3d9.dll; later creates: d3d9-remix.dll -> .trex runtime
-D3DPopTB.exe           -> d3d9-remix.dll -> .trex runtime
-popTB.exe              -> d3d9-remix.dll -> .trex runtime
-```
+The current package therefore fixes the D3D9 presentation path first:
 
-Install requirement:
+- `MultiverseLauncher.exe` still receives system D3D9.
+- The first two `popTBM.exe` D3D9 create calls still receive system D3D9.
+- Later `popTBM.exe` D3D9 create calls receive RTX Remix.
+- Those Remix create calls are forced to windowed presentation parameters inside the selector before they reach `d3d9-remix.dll`.
 
-```text
-<game>\d3d9.dll          selector shim from this repo
-<game>\d3d9-remix.dll    NVIDIA RTX Remix root bridge d3d9.dll, renamed
-<game>\.trex\            NVIDIA RTX Remix runtime folder
-```
+The force-windowed rewrite is only on the Remix-selected `popTBM.exe` `CreateDevice`/`CreateDeviceEx` path. Launcher, deferred startup, and other system-D3D9 paths are left unchanged.
 
-The remaining known blocker is renderer state, not launcher hook selection. This package now includes a first-stage D3D9 RHW fixup for:
+This replaces reliance on `.trex\bridge.conf` `client.forceWindowed`, because the submitted bridge log repeatedly reports that option as `Option failed to parse`.
 
-```text
-[RTX-Compatibility-Info] Skipped drawcall, using pre-transformed vertices which isn't currently supported.
-[RTX-Compatibility-Info] Trying to raytrace but not detecting a valid camera.
-[RTX] CameraManager: rejected an invalid camera
-```
+The RHW/POSITIONT fixup remains present in source but is disabled by default through `d3d9-selector.ini`. Re-enable it only after the menu/gameplay device is stable.
 
-The new D3D9 proxy tries to turn RHW FVF draw calls into fixed-function-position draw calls with a synthetic orthographic camera. This should be tested only with the Multiverse `direct3d9` renderer path first.
-
-The previous source zip was missing the committed root `d3d9.dll`, so renaming NVIDIA's `d3d9.dll` to `d3d9-remix.dll` left no local D3D9 entry point for Windows to load. This version commits the selector binary and keeps NVIDIA runtime binaries ignored.
+The committed root `d3d9.dll` is the patched selector build corresponding to this source update. Future selector binary updates should be rebuilt with `src/d3d9-remix-selector/build-selector.cmd`.
