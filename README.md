@@ -158,3 +158,19 @@ d3d9-remix.dll    renamed NVIDIA RTX Remix bridge
 ```
 
 This repo intentionally commits the selector `d3d9.dll`; NVIDIA runtime binaries remain ignored.
+
+## Current Multiverse D3D9 crash handling
+
+The selector intentionally keeps RTX Remix off the first transient Multiverse D3D9 devices. Those devices are used for intro/video/menu transitions and are destroyed before gameplay; attaching RTX Remix to them can crash the bridge during teardown.
+
+Default `d3d9-selector.ini` now uses:
+
+```ini
+[popTBM]
+deferCreates=3
+forceWindowedForRemix=1
+enableRhwFixup=0
+promoteSystemDeviceWithAutoDepth=1
+```
+
+The selector writes `d3d9-selector.log` next to `d3d9.dll`. If the game still crashes, check whether the log shows `backend=remix` before the gameplay device. Increase `deferCreates` by one if Remix is still attached to the menu device.
