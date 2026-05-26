@@ -101,7 +101,7 @@ Observed runtime messages:
 [RTX] CameraManager: rejected an invalid camera
 ```
 
-The root `d3d9.dll` selector now includes a Populous-specific D3D9 proxy. In game processes it wraps the D3D9 device and rewrites `D3DFVF_XYZRHW` draw state into a synthetic fixed-function orthographic camera path before the call reaches RTX Remix. See `docs/d3d9-rhw-fixup.md`.
+The root `d3d9.dll` selector now includes a Populous-specific D3D9 proxy. In game processes it wraps the stable Remix-routed D3D9 device, forces an auto depth/stencil attachment with retry fallback, rewrites `D3DFVF_XYZRHW` draw state, and wraps vertex declarations using `D3DDECLUSAGE_POSITIONT` so Remix receives normal `POSITION` data plus a synthetic fixed-function orthographic camera path. See `docs/d3d9-rhw-fixup.md`.
 
 ## Runtime log checks
 
@@ -169,8 +169,18 @@ Default `d3d9-selector.ini` now uses:
 [popTBM]
 deferCreates=3
 forceWindowedForRemix=1
-enableRhwFixup=0
+enableRhwFixup=1
+forceAutoDepthStencilForRemix=1
 promoteSystemDeviceWithAutoDepth=1
 ```
 
 The selector writes `d3d9-selector.log` next to `d3d9.dll`. If the game still crashes, check whether the log shows `backend=remix` before the gameplay device. Increase `deferCreates` by one if Remix is still attached to the menu device.
+
+If the game runs but Remix has no visible effect, check for these new stream-repair lines:
+
+```text
+selector: streamRepair d3dCreateCall=... kind=FVF_XYZRHW
+selector: streamRepair d3dCreateCall=... kind=POSITIONT_DECL
+```
+
+See `docs/d3d9-rhw-fixup.md` for the D3D9 stream repair path.
