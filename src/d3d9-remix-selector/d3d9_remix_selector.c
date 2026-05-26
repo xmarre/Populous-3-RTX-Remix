@@ -704,6 +704,7 @@ static void log_stream_repair(UINT create_call, const char* kind) {
   log_write_text("\r\n");
 }
 
+
 static int get_selector_ini_path(WCHAR* path, DWORD cap) {
   static const WCHAR INI_NAME[] = { '\\','d','3','d','9','-','s','e','l','e','c','t','o','r','.','i','n','i',0 };
   if (!path || cap < 2) return 0;
@@ -741,19 +742,64 @@ static UINT poptbm_force_windowed_for_remix(void) {
 static UINT poptbm_enable_rhw_fixup(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'e','n','a','b','l','e','R','h','w','F','i','x','u','p',0 };
-  return read_selector_ini_uint(SECTION, KEY, 1, 1);
+  return read_selector_ini_uint(SECTION, KEY, 0, 1);
 }
 
 static UINT poptbm_force_auto_depth_for_remix(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'f','o','r','c','e','A','u','t','o','D','e','p','t','h','S','t','e','n','c','i','l','F','o','r','R','e','m','i','x',0 };
-  return read_selector_ini_uint(SECTION, KEY, 1, 1);
+  return read_selector_ini_uint(SECTION, KEY, 0, 1);
 }
 
 static UINT poptbm_promote_system_device_with_auto_depth(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'p','r','o','m','o','t','e','S','y','s','t','e','m','D','e','v','i','c','e','W','i','t','h','A','u','t','o','D','e','p','t','h',0 };
   return read_selector_ini_uint(SECTION, KEY, 1, 1);
+}
+
+
+static UINT poptbm_trace_d3d9_stream(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 't','r','a','c','e','D','3','D','9','S','t','r','e','a','m',0 };
+  return read_selector_ini_uint(SECTION, KEY, 0, 1);
+}
+
+static UINT poptbm_trace_draw_limit(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 't','r','a','c','e','D','r','a','w','L','i','m','i','t',0 };
+  return read_selector_ini_uint(SECTION, KEY, 256, 10000);
+}
+
+static UINT g_trace_d3d9_stream = 0;
+static UINT g_trace_draw_limit = 256;
+static volatile long g_trace_config_cached = 0;
+
+static void ensure_trace_config_cached(void) {
+  UINT trace_d3d9_stream;
+  UINT trace_limit;
+  if (g_trace_config_cached) return;
+
+  trace_d3d9_stream = poptbm_trace_d3d9_stream();
+  trace_limit = poptbm_trace_draw_limit();
+
+  lock_proxy_state();
+  if (!g_trace_config_cached) {
+    g_trace_d3d9_stream = trace_d3d9_stream;
+    g_trace_draw_limit = trace_limit;
+    __sync_synchronize();
+    g_trace_config_cached = 1;
+  }
+  unlock_proxy_state();
+}
+
+static UINT trace_d3d9_stream_enabled(void) {
+  ensure_trace_config_cached();
+  return g_trace_d3d9_stream;
+}
+
+static UINT trace_draw_limit(void) {
+  ensure_trace_config_cached();
+  return g_trace_draw_limit;
 }
 
 static HMODULE ensure_real_d3d9(void) {
@@ -1084,6 +1130,12 @@ typedef struct D3DVERTEXELEMENT9_ {
 #define D3DFMT_D24X8 77u
 #define D3DFMT_D16   80u
 
+#define D3DRS_ZENABLE          7u
+#define D3DRS_ZWRITEENABLE     14u
+#define D3DRS_ALPHABLENDENABLE 27u
+#define D3DRS_FOGENABLE        28u
+#define D3DRS_LIGHTING         137u
+
 #define D3DPT_POINTLIST     1
 #define D3DPT_LINELIST      2
 #define D3DPT_LINESTRIP     3
@@ -1130,6 +1182,8 @@ typedef struct DeviceProxy_ {
   IDirect3DVertexDeclaration9* rhw_decl;
   DWORD rhw_decl_fvf;
   unsigned int create_call_index;
+  unsigned int trace_events;
+  DWORD last_logged_fvf;
 } DeviceProxy;
 
 typedef struct VertexDeclProxy_ {
@@ -1140,6 +1194,31 @@ typedef struct VertexDeclProxy_ {
   DWORD magic;
   int transformed_position;
 } VertexDeclProxy;
+
+static int trace_stream_event_allowed(DeviceProxy* self) {
+  UINT limit;
+  if (!self || !trace_d3d9_stream_enabled()) return 0;
+  limit = trace_draw_limit();
+  if (self->trace_events >= limit) return 0;
+  ++self->trace_events;
+  return 1;
+}
+
+static void log_stream_trace(DeviceProxy* self, const char* kind, DWORD a, DWORD b, DWORD c) {
+  if (!trace_stream_event_allowed(self)) return;
+  log_write_text("selector: streamTrace d3dCreateCall=");
+  log_write_uint(self->create_call_index);
+  log_write_text(" kind=");
+  log_write_text(kind);
+  log_write_text(" a=");
+  log_write_hex32(a);
+  log_write_text(" b=");
+  log_write_hex32(b);
+  log_write_text(" c=");
+  log_write_hex32(c);
+  log_write_text("\r\n");
+}
+
 
 static D3D9Proxy g_d3d9_proxy_pool[MAX_D3D9_PROXIES];
 static DeviceProxy g_device_proxy_pool[MAX_DEVICE_PROXIES];
@@ -1476,6 +1555,7 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
   DeviceProxy* wrapped = NULL;
   if (!real) return NULL;
 
+  ensure_trace_config_cached();
   lock_proxy_state();
   for (i = 0; i < MAX_DEVICE_PROXIES; ++i) {
     if (!g_device_proxy_pool[i].real) {
@@ -1501,6 +1581,8 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
       d->rhw_decl = NULL;
       d->rhw_decl_fvf = 0;
       d->create_call_index = parent ? parent->create_call_index : g_last_selected_create_call;
+      d->trace_events = 0;
+      d->last_logged_fvf = 0;
       update_device_size_from_pp(d, pp);
       d->viewport.Width = d->bb_width;
       d->viewport.Height = d->bb_height;
@@ -1880,7 +1962,7 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
   }
-  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || !poptbm_enable_rhw_fixup()) {
+  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || (!poptbm_enable_rhw_fixup() && !trace_d3d9_stream_enabled())) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
@@ -1929,7 +2011,7 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UIN
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
   }
-  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || !poptbm_enable_rhw_fixup()) {
+  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || (!poptbm_enable_rhw_fixup() && !trace_d3d9_stream_enabled())) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
@@ -1993,6 +2075,8 @@ static ULONG __attribute__((stdcall)) Device_Release(DeviceProxy* self) {
     self->rhw_decl = NULL;
     self->rhw_decl_fvf = 0;
     self->create_call_index = 0;
+    self->trace_events = 0;
+    self->last_logged_fvf = 0;
     unlock_proxy_state();
   }
   return refs;
@@ -2037,7 +2121,13 @@ static HRESULT __attribute__((stdcall)) Device_SetFVF(DeviceProxy* self, DWORD f
   self->game_fvf = fvf;
   self->active_fvf = fvf;
   self->using_game_decl = 0;
-  if ((fvf & D3DFVF_XYZRHW) && ensure_rhw_decl(self, fvf)) {
+
+  if ((fvf & D3DFVF_XYZRHW) && self->last_logged_fvf != fvf) {
+    self->last_logged_fvf = fvf;
+    log_stream_trace(self, "FVF_XYZRHW", fvf, 0, 0);
+  }
+
+  if (poptbm_enable_rhw_fixup() && (fvf & D3DFVF_XYZRHW) && ensure_rhw_decl(self, fvf)) {
     self->rhw_active = 1;
     log_stream_repair(self->create_call_index, "FVF_XYZRHW");
     apply_rhw_camera(self);
@@ -2070,12 +2160,17 @@ static HRESULT __attribute__((stdcall)) Device_CreateVertexDeclaration(DevicePro
   if (!ppDecl) return E_POINTER;
   *ppDecl = NULL;
   hr = call_create_vertex_declaration(self ? self->real : NULL, pVertexElements, &real_decl);
-  if (FAILED(hr) || !real_decl || !self || !poptbm_enable_rhw_fixup()) {
+  if (FAILED(hr) || !real_decl || !self) {
     *ppDecl = real_decl;
     return hr;
   }
   transformed = build_positiont_vertex_declaration(pVertexElements, fixed_elems, MAX_VERTEX_DECL_ELEMENTS);
   if (!transformed) {
+    *ppDecl = real_decl;
+    return hr;
+  }
+  log_stream_trace(self, "POSITIONT_DECL", 0, 0, 0);
+  if (!poptbm_enable_rhw_fixup()) {
     *ppDecl = real_decl;
     return hr;
   }
@@ -2117,6 +2212,15 @@ static HRESULT __attribute__((stdcall)) Device_SetVertexShader(DeviceProxy* self
   return fn ? fn(self->real, shader) : E_POINTER;
 }
 
+static HRESULT __attribute__((stdcall)) Device_SetRenderState(DeviceProxy* self, DWORD State, DWORD Value) {
+  void** vt = self && self->real ? *(void***)self->real : NULL;
+  HRESULT (__attribute__((stdcall)) *fn)(void*,DWORD,DWORD) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,DWORD,DWORD))vt[57] : NULL;
+  if (self && (State == D3DRS_ZENABLE || State == D3DRS_ZWRITEENABLE || State == D3DRS_ALPHABLENDENABLE || State == D3DRS_FOGENABLE || State == D3DRS_LIGHTING)) {
+    log_stream_trace(self, "SetRenderState", State, Value, 0);
+  }
+  return fn ? fn(self->real, State, Value) : E_POINTER;
+}
+
 static HRESULT __attribute__((stdcall)) Device_SetStreamSource(DeviceProxy* self, UINT StreamNumber, IDirect3DVertexBuffer9* pStreamData, UINT OffsetInBytes, UINT Stride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,IDirect3DVertexBuffer9*,UINT,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,IDirect3DVertexBuffer9*,UINT,UINT))vt[100] : NULL;
@@ -2126,6 +2230,7 @@ static HRESULT __attribute__((stdcall)) Device_SetStreamSource(DeviceProxy* self
 static HRESULT __attribute__((stdcall)) Device_DrawPrimitive(DeviceProxy* self, UINT PrimitiveType, UINT StartVertex, UINT PrimitiveCount) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,UINT))vt[81] : NULL;
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawPrimitive_RHW", PrimitiveType, StartVertex, PrimitiveCount);
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, StartVertex, PrimitiveCount) : E_POINTER;
 }
@@ -2133,6 +2238,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawPrimitive(DeviceProxy* self, 
 static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitive(DeviceProxy* self, UINT PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,INT,UINT,UINT,UINT,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,INT,UINT,UINT,UINT,UINT))vt[82] : NULL;
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitive_RHW", PrimitiveType, NumVertices, primCount);
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount) : E_POINTER;
 }
@@ -2140,6 +2246,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitive(DeviceProxy*
 static HRESULT __attribute__((stdcall)) Device_DrawPrimitiveUP(DeviceProxy* self, UINT PrimitiveType, UINT PrimitiveCount, const void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,const void*,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,const void*,UINT))vt[83] : NULL;
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawPrimitiveUP_RHW", PrimitiveType, PrimitiveCount, VertexStreamZeroStride);
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride) : E_POINTER;
 }
@@ -2147,6 +2254,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawPrimitiveUP(DeviceProxy* self
 static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitiveUP(DeviceProxy* self, UINT PrimitiveType, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, const void* pIndexData, UINT IndexDataFormat, const void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,UINT,UINT,const void*,UINT,const void*,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,UINT,UINT,const void*,UINT,const void*,UINT))vt[84] : NULL;
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitiveUP_RHW", PrimitiveType, NumVertices, PrimitiveCount);
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData, IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride) : E_POINTER;
 }
@@ -2232,7 +2340,7 @@ static void init_proxy_vtables(void) {
   g_device_vtbl[54] = (void*)DeviceForward_54;
   g_device_vtbl[55] = (void*)DeviceForward_55;
   g_device_vtbl[56] = (void*)DeviceForward_56;
-  g_device_vtbl[57] = (void*)DeviceForward_57;
+  g_device_vtbl[57] = (void*)Device_SetRenderState;
   g_device_vtbl[58] = (void*)DeviceForward_58;
   g_device_vtbl[59] = (void*)DeviceForward_59;
   g_device_vtbl[60] = (void*)DeviceForward_60;
