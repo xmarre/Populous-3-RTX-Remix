@@ -196,6 +196,7 @@ static PFN_RaiseException pRaiseException = NULL;
 static PFN_CreateFileW pCreateFileW = NULL;
 static PFN_WriteFile pWriteFile = NULL;
 static PFN_CloseHandle pCloseHandle = NULL;
+static volatile long g_log_session_started = 0;
 static unsigned int g_last_selected_create_call = 0;
 
 void MissingExportFailure_stub(void);
@@ -614,11 +615,44 @@ static int get_selector_log_path(WCHAR* path, DWORD cap) {
   return path[0] != 0;
 }
 
+static void log_start_session_once(void) {
+  static const char HEADER[] =
+    "selector: session build=gameplay-call5-focused-trace deferDefault=4 rhwMutateDefault=0\r\n";
+  WCHAR path[MAX_PATH_CHARS];
+  HANDLE h;
+  DWORD written = 0;
+  BOOL wrote;
+  BOOL closed;
+  if (g_log_session_started == 2) return;
+  if (!__sync_bool_compare_and_swap(&g_log_session_started, 0, 1)) return;
+  if (!ensure_kernel_functions() || !pCreateFileW || !pWriteFile || !pCloseHandle) {
+    __sync_lock_release(&g_log_session_started);
+    return;
+  }
+  if (!get_selector_log_path(path, MAX_PATH_CHARS)) {
+    __sync_lock_release(&g_log_session_started);
+    return;
+  }
+  h = pCreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (!h || h == INVALID_HANDLE_VALUE_LOCAL) {
+    __sync_lock_release(&g_log_session_started);
+    return;
+  }
+  wrote = pWriteFile(h, HEADER, (DWORD)(sizeof(HEADER) - 1), &written, NULL);
+  closed = pCloseHandle(h);
+  if (wrote && written == (DWORD)(sizeof(HEADER) - 1) && closed) {
+    __sync_lock_test_and_set(&g_log_session_started, 2);
+  } else {
+    __sync_lock_release(&g_log_session_started);
+  }
+}
+
 static void log_write_raw(const char* text, unsigned int len) {
   WCHAR path[MAX_PATH_CHARS];
   HANDLE h;
   DWORD written = 0;
   if (!text || !len || !ensure_kernel_functions() || !pCreateFileW || !pWriteFile || !pCloseHandle) return;
+  log_start_session_once();
   if (!get_selector_log_path(path, MAX_PATH_CHARS)) return;
   h = pCreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
   if (!h || h == INVALID_HANDLE_VALUE_LOCAL) return;
@@ -728,7 +762,7 @@ static UINT read_selector_ini_uint(const WCHAR* section, const WCHAR* key, UINT 
 static UINT multiverse_defer_create_count(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'd','e','f','e','r','C','r','e','a','t','e','s',0 };
-  UINT value = read_selector_ini_uint(SECTION, KEY, 3, 16);
+  UINT value = read_selector_ini_uint(SECTION, KEY, 4, 16);
   if (value < 2) value = 2;
   return value;
 }
@@ -764,6 +798,12 @@ static UINT poptbm_trace_d3d9_stream(void) {
   return read_selector_ini_uint(SECTION, KEY, 0, 1);
 }
 
+static UINT poptbm_trace_render_states(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 't','r','a','c','e','R','e','n','d','e','r','S','t','a','t','e','s',0 };
+  return read_selector_ini_uint(SECTION, KEY, 0, 1);
+}
+
 static UINT poptbm_trace_draw_limit(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 't','r','a','c','e','D','r','a','w','L','i','m','i','t',0 };
@@ -771,20 +811,24 @@ static UINT poptbm_trace_draw_limit(void) {
 }
 
 static UINT g_trace_d3d9_stream = 0;
+static UINT g_trace_render_states = 0;
 static UINT g_trace_draw_limit = 256;
 static volatile long g_trace_config_cached = 0;
 
 static void ensure_trace_config_cached(void) {
   UINT trace_d3d9_stream;
+  UINT trace_render_states;
   UINT trace_limit;
   if (g_trace_config_cached) return;
 
   trace_d3d9_stream = poptbm_trace_d3d9_stream();
+  trace_render_states = poptbm_trace_render_states();
   trace_limit = poptbm_trace_draw_limit();
 
   lock_proxy_state();
   if (!g_trace_config_cached) {
     g_trace_d3d9_stream = trace_d3d9_stream;
+    g_trace_render_states = trace_render_states;
     g_trace_draw_limit = trace_limit;
     __sync_synchronize();
     g_trace_config_cached = 1;
@@ -795,6 +839,11 @@ static void ensure_trace_config_cached(void) {
 static UINT trace_d3d9_stream_enabled(void) {
   ensure_trace_config_cached();
   return g_trace_d3d9_stream;
+}
+
+static UINT trace_render_states_enabled(void) {
+  ensure_trace_config_cached();
+  return g_trace_render_states;
 }
 
 static UINT trace_draw_limit(void) {
@@ -1184,6 +1233,11 @@ typedef struct DeviceProxy_ {
   unsigned int create_call_index;
   unsigned int trace_events;
   DWORD last_logged_fvf;
+  DWORD rs_zenable;
+  DWORD rs_zwriteenable;
+  DWORD rs_alphablend;
+  DWORD rs_fog;
+  DWORD rs_lighting;
 } DeviceProxy;
 
 typedef struct VertexDeclProxy_ {
@@ -1425,6 +1479,15 @@ static void update_device_viewport(DeviceProxy* self, const D3DVIEWPORT9* vp) {
   if (vp->Height) self->bb_height = vp->Height;
 }
 
+static void reset_device_trace_state(DeviceProxy* self) {
+  if (!self) return;
+  self->rs_zenable = 0xFFFFFFFFu;
+  self->rs_zwriteenable = 0xFFFFFFFFu;
+  self->rs_alphablend = 0xFFFFFFFFu;
+  self->rs_fog = 0xFFFFFFFFu;
+  self->rs_lighting = 0xFFFFFFFFu;
+}
+
 static void copy_presentation_parameters(D3DPRESENT_PARAMETERS* dst, const D3DPRESENT_PARAMETERS* src) {
   if (!dst || !src) return;
   dst->BackBufferWidth = src->BackBufferWidth;
@@ -1583,6 +1646,7 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
       d->create_call_index = parent ? parent->create_call_index : g_last_selected_create_call;
       d->trace_events = 0;
       d->last_logged_fvf = 0;
+      reset_device_trace_state(d);
       update_device_size_from_pp(d, pp);
       d->viewport.Width = d->bb_width;
       d->viewport.Height = d->bb_height;
@@ -2077,6 +2141,7 @@ static ULONG __attribute__((stdcall)) Device_Release(DeviceProxy* self) {
     self->create_call_index = 0;
     self->trace_events = 0;
     self->last_logged_fvf = 0;
+    reset_device_trace_state(self);
     unlock_proxy_state();
   }
   return refs;
@@ -2096,7 +2161,10 @@ static HRESULT __attribute__((stdcall)) Device_Reset(DeviceProxy* self, D3DPRESE
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,D3DPRESENT_PARAMETERS*) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,D3DPRESENT_PARAMETERS*))vt[16] : NULL;
   HRESULT hr = fn ? fn(self->real, pp) : E_POINTER;
-  if (SUCCEEDED(hr)) update_device_size_from_pp(self, pp);
+  if (SUCCEEDED(hr)) {
+    update_device_size_from_pp(self, pp);
+    reset_device_trace_state(self);
+  }
   return hr;
 }
 
@@ -2212,11 +2280,40 @@ static HRESULT __attribute__((stdcall)) Device_SetVertexShader(DeviceProxy* self
   return fn ? fn(self->real, shader) : E_POINTER;
 }
 
+static DWORD device_rhw_state_bits(DeviceProxy* self) {
+  DWORD bits = 0;
+  if (!self) return 0;
+  if (self->rs_zenable != 0xFFFFFFFFu && self->rs_zenable == 0) bits |= 0x00000001u;
+  if (self->rs_lighting != 0xFFFFFFFFu && self->rs_lighting == 0) bits |= 0x00000002u;
+  if (self->rs_alphablend != 0xFFFFFFFFu && self->rs_alphablend != 0) bits |= 0x00000004u;
+  if (self->rs_fog != 0xFFFFFFFFu && self->rs_fog == 0) bits |= 0x00000008u;
+  if (self->vertex_shader_active) bits |= 0x00000010u;
+  return bits;
+}
+
+static const char* classify_rhw_draw(DeviceProxy* self, UINT primitive_type, UINT primitive_count) {
+  if (!self) return "DrawPrimitive_RHW";
+  if (self->game_fvf == (D3DFVF_XYZRHW | (1u << D3DFVF_TEXCOUNT_SHIFT)) &&
+      primitive_type == D3DPT_TRIANGLESTRIP && primitive_count == 2 &&
+      (self->rs_zenable == 0 || self->rs_zenable == 0xFFFFFFFFu) &&
+      (self->rs_lighting == 0 || self->rs_lighting == 0xFFFFFFFFu)) {
+    return "FINAL_BLIT_RHW";
+  }
+  return "DrawPrimitive_RHW";
+}
+
 static HRESULT __attribute__((stdcall)) Device_SetRenderState(DeviceProxy* self, DWORD State, DWORD Value) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,DWORD,DWORD) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,DWORD,DWORD))vt[57] : NULL;
-  if (self && (State == D3DRS_ZENABLE || State == D3DRS_ZWRITEENABLE || State == D3DRS_ALPHABLENDENABLE || State == D3DRS_FOGENABLE || State == D3DRS_LIGHTING)) {
-    log_stream_trace(self, "SetRenderState", State, Value, 0);
+  if (self) {
+    if (State == D3DRS_ZENABLE) self->rs_zenable = Value;
+    else if (State == D3DRS_ZWRITEENABLE) self->rs_zwriteenable = Value;
+    else if (State == D3DRS_ALPHABLENDENABLE) self->rs_alphablend = Value;
+    else if (State == D3DRS_FOGENABLE) self->rs_fog = Value;
+    else if (State == D3DRS_LIGHTING) self->rs_lighting = Value;
+    if (trace_render_states_enabled() && (State == D3DRS_ZENABLE || State == D3DRS_ZWRITEENABLE || State == D3DRS_ALPHABLENDENABLE || State == D3DRS_FOGENABLE || State == D3DRS_LIGHTING)) {
+      log_stream_trace(self, "SetRenderState", State, Value, 0);
+    }
   }
   return fn ? fn(self->real, State, Value) : E_POINTER;
 }
@@ -2230,7 +2327,7 @@ static HRESULT __attribute__((stdcall)) Device_SetStreamSource(DeviceProxy* self
 static HRESULT __attribute__((stdcall)) Device_DrawPrimitive(DeviceProxy* self, UINT PrimitiveType, UINT StartVertex, UINT PrimitiveCount) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,UINT))vt[81] : NULL;
-  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawPrimitive_RHW", PrimitiveType, StartVertex, PrimitiveCount);
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, classify_rhw_draw(self, PrimitiveType, PrimitiveCount), PrimitiveType, PrimitiveCount, device_rhw_state_bits(self));
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, StartVertex, PrimitiveCount) : E_POINTER;
 }
@@ -2238,7 +2335,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawPrimitive(DeviceProxy* self, 
 static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitive(DeviceProxy* self, UINT PrimitiveType, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,INT,UINT,UINT,UINT,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,INT,UINT,UINT,UINT,UINT))vt[82] : NULL;
-  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitive_RHW", PrimitiveType, NumVertices, primCount);
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitive_RHW", PrimitiveType, primCount, device_rhw_state_bits(self));
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount) : E_POINTER;
 }
@@ -2246,7 +2343,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitive(DeviceProxy*
 static HRESULT __attribute__((stdcall)) Device_DrawPrimitiveUP(DeviceProxy* self, UINT PrimitiveType, UINT PrimitiveCount, const void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,const void*,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,const void*,UINT))vt[83] : NULL;
-  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawPrimitiveUP_RHW", PrimitiveType, PrimitiveCount, VertexStreamZeroStride);
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, classify_rhw_draw(self, PrimitiveType, PrimitiveCount), PrimitiveType, PrimitiveCount, device_rhw_state_bits(self));
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, PrimitiveCount, pVertexStreamZeroData, VertexStreamZeroStride) : E_POINTER;
 }
@@ -2254,7 +2351,7 @@ static HRESULT __attribute__((stdcall)) Device_DrawPrimitiveUP(DeviceProxy* self
 static HRESULT __attribute__((stdcall)) Device_DrawIndexedPrimitiveUP(DeviceProxy* self, UINT PrimitiveType, UINT MinVertexIndex, UINT NumVertices, UINT PrimitiveCount, const void* pIndexData, UINT IndexDataFormat, const void* pVertexStreamZeroData, UINT VertexStreamZeroStride) {
   void** vt = self && self->real ? *(void***)self->real : NULL;
   HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,UINT,UINT,UINT,const void*,UINT,const void*,UINT) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,UINT,UINT,UINT,const void*,UINT,const void*,UINT))vt[84] : NULL;
-  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitiveUP_RHW", PrimitiveType, NumVertices, PrimitiveCount);
+  if (self && (self->game_fvf & D3DFVF_XYZRHW)) log_stream_trace(self, "DrawIndexedPrimitiveUP_RHW", PrimitiveType, PrimitiveCount, device_rhw_state_bits(self));
   if (self && self->rhw_active) apply_rhw_state_for_draw(self);
   return fn ? fn(self->real, PrimitiveType, MinVertexIndex, NumVertices, PrimitiveCount, pIndexData, IndexDataFormat, pVertexStreamZeroData, VertexStreamZeroStride) : E_POINTER;
 }
