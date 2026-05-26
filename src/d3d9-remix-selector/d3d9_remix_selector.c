@@ -1460,6 +1460,9 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
   }
 
   hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, &real_dev);
+  if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
+    copy_presentation_parameters(pPresentationParameters, pp_to_use);
+  }
   if (FAILED(hr) || !real_dev || !poptbm_enable_rhw_fixup()) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
@@ -1488,6 +1491,9 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UIN
   }
 
   hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, mode_to_use, &real_dev);
+  if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
+    copy_presentation_parameters(pPresentationParameters, pp_to_use);
+  }
   if (FAILED(hr) || !real_dev || !poptbm_enable_rhw_fixup()) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
