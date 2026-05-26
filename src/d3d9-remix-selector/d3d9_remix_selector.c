@@ -1094,6 +1094,7 @@ typedef struct D3DVERTEXELEMENT9_ {
 #define MAX_D3D9_PROXIES 8
 #define MAX_DEVICE_PROXIES 16
 #define MAX_VERTEX_DECL_PROXIES 64
+#define MAX_VERTEX_DECL_ELEMENTS 65
 
 #define PROXY_MAGIC_D3D9 0x44523950u
 #define PROXY_MAGIC_DEV  0x56453950u
@@ -1286,7 +1287,7 @@ static int build_positiont_vertex_declaration(const D3DVERTEXELEMENT9* in_elems,
   unsigned int i = 0;
   int saw_positiont = 0;
   if (!in_elems || !out_elems || max_elems < 2) return 0;
-  while (i + 1 < max_elems && !is_decl_end(&in_elems[i])) {
+  while (i < max_elems && !is_decl_end(&in_elems[i])) {
     out_elems[i] = in_elems[i];
     if (out_elems[i].Usage == D3DDECLUSAGE_POSITIONT) {
       saw_positiont = 1;
@@ -1295,7 +1296,7 @@ static int build_positiont_vertex_declaration(const D3DVERTEXELEMENT9* in_elems,
     }
     ++i;
   }
-  if (!saw_positiont || i + 1 >= max_elems) return 0;
+  if (!saw_positiont || i >= max_elems) return 0;
   out_elems[i].Stream = 0xFF;
   out_elems[i].Offset = 0;
   out_elems[i].Type = D3DDECLTYPE_UNUSED;
@@ -1707,6 +1708,7 @@ __attribute__((naked)) void DeviceForward_133(void) { __asm__("movl 4(%esp), %ea
 
 static HRESULT __attribute__((stdcall)) VertexDecl_QueryInterface(VertexDeclProxy* self, const GUID* riid, void** ppv) {
   if (!ppv) return E_POINTER;
+  *ppv = NULL;
   if (self && self->magic == PROXY_MAGIC_DECL &&
       (guid_eq(riid, &IID_IUnknown_local) || guid_eq(riid, &IID_IDirect3DVertexDeclaration9_local))) {
     *ppv = self;
@@ -2059,7 +2061,7 @@ static HRESULT __attribute__((stdcall)) Device_GetFVF(DeviceProxy* self, DWORD* 
 }
 
 static HRESULT __attribute__((stdcall)) Device_CreateVertexDeclaration(DeviceProxy* self, const D3DVERTEXELEMENT9* pVertexElements, IDirect3DVertexDeclaration9** ppDecl) {
-  D3DVERTEXELEMENT9 fixed_elems[32];
+  D3DVERTEXELEMENT9 fixed_elems[MAX_VERTEX_DECL_ELEMENTS];
   IDirect3DVertexDeclaration9* real_decl = NULL;
   IDirect3DVertexDeclaration9* remix_decl = NULL;
   HRESULT hr;
@@ -2072,7 +2074,7 @@ static HRESULT __attribute__((stdcall)) Device_CreateVertexDeclaration(DevicePro
     *ppDecl = real_decl;
     return hr;
   }
-  transformed = build_positiont_vertex_declaration(pVertexElements, fixed_elems, 32);
+  transformed = build_positiont_vertex_declaration(pVertexElements, fixed_elems, MAX_VERTEX_DECL_ELEMENTS);
   if (!transformed) {
     *ppDecl = real_decl;
     return hr;
