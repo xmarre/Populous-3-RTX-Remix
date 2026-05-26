@@ -686,6 +686,24 @@ static void log_backend_promotion(UINT create_call, const char* reason, UINT ok)
   log_write_text("\r\n");
 }
 
+static void log_depth_retry(UINT create_call, LONG hr_first, LONG hr_second) {
+  log_write_text("selector: CreateDevice depthRetry d3dCreateCall=");
+  log_write_uint(create_call);
+  log_write_text(" firstHr=");
+  log_write_hex32((DWORD)hr_first);
+  log_write_text(" secondHr=");
+  log_write_hex32((DWORD)hr_second);
+  log_write_text("\r\n");
+}
+
+static void log_stream_repair(UINT create_call, const char* kind) {
+  log_write_text("selector: streamRepair d3dCreateCall=");
+  log_write_uint(create_call);
+  log_write_text(" kind=");
+  log_write_text(kind);
+  log_write_text("\r\n");
+}
+
 static int get_selector_ini_path(WCHAR* path, DWORD cap) {
   static const WCHAR INI_NAME[] = { '\\','d','3','d','9','-','s','e','l','e','c','t','o','r','.','i','n','i',0 };
   if (!path || cap < 2) return 0;
@@ -723,7 +741,13 @@ static UINT poptbm_force_windowed_for_remix(void) {
 static UINT poptbm_enable_rhw_fixup(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'e','n','a','b','l','e','R','h','w','F','i','x','u','p',0 };
-  return read_selector_ini_uint(SECTION, KEY, 0, 1);
+  return read_selector_ini_uint(SECTION, KEY, 1, 1);
+}
+
+static UINT poptbm_force_auto_depth_for_remix(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 'f','o','r','c','e','A','u','t','o','D','e','p','t','h','S','t','e','n','c','i','l','F','o','r','R','e','m','i','x',0 };
+  return read_selector_ini_uint(SECTION, KEY, 1, 1);
 }
 
 static UINT poptbm_promote_system_device_with_auto_depth(void) {
@@ -1045,9 +1069,20 @@ typedef struct D3DVERTEXELEMENT9_ {
 #define D3DDECLTYPE_UNUSED   17
 #define D3DDECLMETHOD_DEFAULT 0
 #define D3DDECLUSAGE_POSITION 0
+#define D3DDECLUSAGE_BLENDWEIGHT 1
+#define D3DDECLUSAGE_BLENDINDICES 2
+#define D3DDECLUSAGE_NORMAL   3
 #define D3DDECLUSAGE_PSIZE    4
 #define D3DDECLUSAGE_TEXCOORD 5
+#define D3DDECLUSAGE_TANGENT  6
+#define D3DDECLUSAGE_BINORMAL 7
+#define D3DDECLUSAGE_TESSFACTOR 8
+#define D3DDECLUSAGE_POSITIONT 9
 #define D3DDECLUSAGE_COLOR    10
+
+#define D3DFMT_D24S8 75u
+#define D3DFMT_D24X8 77u
+#define D3DFMT_D16   80u
 
 #define D3DPT_POINTLIST     1
 #define D3DPT_LINELIST      2
@@ -1058,9 +1093,12 @@ typedef struct D3DVERTEXELEMENT9_ {
 
 #define MAX_D3D9_PROXIES 8
 #define MAX_DEVICE_PROXIES 16
+#define MAX_VERTEX_DECL_PROXIES 64
+#define MAX_VERTEX_DECL_ELEMENTS 65
 
 #define PROXY_MAGIC_D3D9 0x44523950u
 #define PROXY_MAGIC_DEV  0x56453950u
+#define PROXY_MAGIC_DECL 0x4C434450u
 
 typedef HRESULT (__attribute__((stdcall)) *PFN_Direct3DCreate9Ex_Real)(UINT, void**);
 typedef void*   (__attribute__((stdcall)) *PFN_Direct3DCreate9_Real)(UINT);
@@ -1094,10 +1132,21 @@ typedef struct DeviceProxy_ {
   unsigned int create_call_index;
 } DeviceProxy;
 
+typedef struct VertexDeclProxy_ {
+  void** lpVtbl;
+  IDirect3DVertexDeclaration9* real_decl;
+  IDirect3DVertexDeclaration9* remix_decl;
+  DeviceProxy* parent;
+  DWORD magic;
+  int transformed_position;
+} VertexDeclProxy;
+
 static D3D9Proxy g_d3d9_proxy_pool[MAX_D3D9_PROXIES];
 static DeviceProxy g_device_proxy_pool[MAX_DEVICE_PROXIES];
+static VertexDeclProxy g_decl_proxy_pool[MAX_VERTEX_DECL_PROXIES];
 static void* g_d3d9_vtbl[22];
 static void* g_device_vtbl[134];
+static void* g_decl_vtbl[5];
 static int g_proxy_vtables_init = 0;
 
 static int guid_eq(const GUID* a, const GUID* b) {
@@ -1113,6 +1162,7 @@ static const GUID IID_IDirect3D9_local = {0x81BDCBCAu,0x64D4u,0x426Du,{0xAEu,0x8
 static const GUID IID_IDirect3D9Ex_local = {0x02177241u,0x69FCu,0x400Cu,{0x8Fu,0xF1u,0x93u,0xA4u,0x4Du,0xF6u,0x86u,0x1Du}};
 static const GUID IID_IDirect3DDevice9_local = {0xD0223B96u,0xBF7Au,0x43FDu,{0x92u,0xBDu,0xA4u,0x3Bu,0x0Du,0x82u,0xB9u,0xEBu}};
 static const GUID IID_IDirect3DDevice9Ex_local = {0xB18B10CEu,0x2649u,0x405Au,{0x87u,0x0Fu,0x95u,0xF7u,0x77u,0xD4u,0x31u,0x3Au}};
+static const GUID IID_IDirect3DVertexDeclaration9_local = {0xDD13C59Cu,0x36FAu,0x4098u,{0xA8u,0xFBu,0xC7u,0xEDu,0x39u,0xDCu,0x85u,0x46u}};
 
 static ULONG call_addref(void* obj) {
   void** vt = obj ? *(void***)obj : NULL;
@@ -1229,6 +1279,33 @@ static int build_rhw_vertex_declaration(DWORD fvf, D3DVERTEXELEMENT9* elems, uns
   return 1;
 }
 
+static int is_decl_end(const D3DVERTEXELEMENT9* e) {
+  return e && e->Stream == 0xFF && e->Type == D3DDECLTYPE_UNUSED;
+}
+
+static int build_positiont_vertex_declaration(const D3DVERTEXELEMENT9* in_elems, D3DVERTEXELEMENT9* out_elems, unsigned int max_elems) {
+  unsigned int i = 0;
+  int saw_positiont = 0;
+  if (!in_elems || !out_elems || max_elems < 2) return 0;
+  while (i < max_elems && !is_decl_end(&in_elems[i])) {
+    out_elems[i] = in_elems[i];
+    if (out_elems[i].Usage == D3DDECLUSAGE_POSITIONT) {
+      saw_positiont = 1;
+      out_elems[i].Usage = D3DDECLUSAGE_POSITION;
+      if (out_elems[i].Type == D3DDECLTYPE_FLOAT4) out_elems[i].Type = D3DDECLTYPE_FLOAT3;
+    }
+    ++i;
+  }
+  if (!saw_positiont || i >= max_elems) return 0;
+  out_elems[i].Stream = 0xFF;
+  out_elems[i].Offset = 0;
+  out_elems[i].Type = D3DDECLTYPE_UNUSED;
+  out_elems[i].Method = 0;
+  out_elems[i].Usage = 0;
+  out_elems[i].UsageIndex = 0;
+  return 1;
+}
+
 static void matrix_identity(D3DMATRIX* m) {
   unsigned int r, c;
   for (r = 0; r < 4; ++r) for (c = 0; c < 4; ++c) m->m[r][c] = (r == c) ? 1.0f : 0.0f;
@@ -1294,6 +1371,12 @@ static void make_windowed_presentation(D3DPRESENT_PARAMETERS* pp, HWND fallback_
   if (!pp->hDeviceWindow && fallback_window) pp->hDeviceWindow = fallback_window;
 }
 
+static void make_auto_depth_presentation(D3DPRESENT_PARAMETERS* pp) {
+  if (!pp || pp->EnableAutoDepthStencil) return;
+  pp->EnableAutoDepthStencil = TRUE;
+  pp->AutoDepthStencilFormat = D3DFMT_D24S8;
+}
+
 static int should_force_windowed_for_remix_create(const D3D9Proxy* self) {
   return self && self->is_remix_backend && is_multiverse_game_process() && poptbm_force_windowed_for_remix();
 }
@@ -1336,6 +1419,33 @@ static void apply_rhw_state_for_draw(DeviceProxy* self) {
   if (!ensure_rhw_decl(self, self->game_fvf)) return;
   apply_rhw_camera(self);
   call_set_vertex_declaration(self->real, self->rhw_decl);
+}
+
+static int is_vertex_decl_proxy(IDirect3DVertexDeclaration9* decl) {
+  VertexDeclProxy* p = (VertexDeclProxy*)decl;
+  return p && p->lpVtbl == g_decl_vtbl && p->magic == PROXY_MAGIC_DECL;
+}
+
+static VertexDeclProxy* wrap_vertex_decl(DeviceProxy* parent, IDirect3DVertexDeclaration9* real_decl, IDirect3DVertexDeclaration9* remix_decl, int transformed_position) {
+  unsigned int i;
+  VertexDeclProxy* wrapped = NULL;
+  if (!real_decl) return NULL;
+  lock_proxy_state();
+  for (i = 0; i < MAX_VERTEX_DECL_PROXIES; ++i) {
+    if (!g_decl_proxy_pool[i].real_decl) {
+      VertexDeclProxy* d = &g_decl_proxy_pool[i];
+      d->lpVtbl = g_decl_vtbl;
+      d->real_decl = real_decl;
+      d->remix_decl = remix_decl ? remix_decl : real_decl;
+      d->parent = parent;
+      d->magic = PROXY_MAGIC_DECL;
+      d->transformed_position = transformed_position;
+      wrapped = d;
+      break;
+    }
+  }
+  unlock_proxy_state();
+  return wrapped;
 }
 
 static D3D9Proxy* wrap_d3d9_object(void* real, int is_ex, int is_remix_backend) {
@@ -1596,6 +1706,69 @@ __attribute__((naked)) void DeviceForward_132(void) { __asm__("movl 4(%esp), %ea
 __attribute__((naked)) void DeviceForward_133(void) { __asm__("movl 4(%esp), %eax\n\t" "movl 4(%eax), %ecx\n\t" "movl %ecx, 4(%esp)\n\t" "movl (%ecx), %edx\n\t" "jmp *532(%edx)\n"); }
 
 
+static HRESULT __attribute__((stdcall)) VertexDecl_QueryInterface(VertexDeclProxy* self, const GUID* riid, void** ppv) {
+  if (!ppv) return E_POINTER;
+  *ppv = NULL;
+  if (self && self->magic == PROXY_MAGIC_DECL &&
+      (guid_eq(riid, &IID_IUnknown_local) || guid_eq(riid, &IID_IDirect3DVertexDeclaration9_local))) {
+    *ppv = self;
+    call_addref(self->real_decl);
+    if (self->remix_decl && self->remix_decl != self->real_decl) call_addref(self->remix_decl);
+    return S_OK;
+  }
+  {
+    void** vt = self && self->real_decl ? *(void***)self->real_decl : NULL;
+    HRESULT (__attribute__((stdcall)) *fn)(void*, const GUID*, void**) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,const GUID*,void**))vt[0] : NULL;
+    return fn ? fn(self->real_decl, riid, ppv) : E_NOINTERFACE;
+  }
+}
+
+static ULONG __attribute__((stdcall)) VertexDecl_AddRef(VertexDeclProxy* self) {
+  ULONG refs = 1;
+  if (!self || self->magic != PROXY_MAGIC_DECL) return refs;
+  refs = call_addref(self->real_decl);
+  if (self->remix_decl && self->remix_decl != self->real_decl) call_addref(self->remix_decl);
+  return refs;
+}
+
+static ULONG __attribute__((stdcall)) VertexDecl_Release(VertexDeclProxy* self) {
+  ULONG refs = 0;
+  if (!self || self->magic != PROXY_MAGIC_DECL) return 0;
+  if (self->remix_decl && self->remix_decl != self->real_decl) call_release(self->remix_decl);
+  refs = call_release(self->real_decl);
+  if (refs == 0) {
+    lock_proxy_state();
+    self->lpVtbl = NULL;
+    self->real_decl = NULL;
+    self->remix_decl = NULL;
+    self->parent = NULL;
+    self->magic = 0;
+    self->transformed_position = 0;
+    unlock_proxy_state();
+  }
+  return refs;
+}
+
+static HRESULT __attribute__((stdcall)) VertexDecl_GetDevice(VertexDeclProxy* self, IDirect3DDevice9** ppDevice) {
+  if (!ppDevice) return E_POINTER;
+  if (self && self->magic == PROXY_MAGIC_DECL && self->parent && self->parent->magic == PROXY_MAGIC_DEV) {
+    *ppDevice = (IDirect3DDevice9*)self->parent;
+    call_addref(self->parent->real);
+    return S_OK;
+  }
+  {
+    void** vt = self && self->real_decl ? *(void***)self->real_decl : NULL;
+    HRESULT (__attribute__((stdcall)) *fn)(void*,IDirect3DDevice9**) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,IDirect3DDevice9**))vt[3] : NULL;
+    return fn ? fn(self->real_decl, ppDevice) : E_POINTER;
+  }
+}
+
+static HRESULT __attribute__((stdcall)) VertexDecl_GetDeclaration(VertexDeclProxy* self, D3DVERTEXELEMENT9* pElement, UINT* pNumElements) {
+  void** vt = self && self->real_decl ? *(void***)self->real_decl : NULL;
+  HRESULT (__attribute__((stdcall)) *fn)(void*,D3DVERTEXELEMENT9*,UINT*) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,D3DVERTEXELEMENT9*,UINT*))vt[4] : NULL;
+  return fn ? fn(self->real_decl, pElement, pNumElements) : E_POINTER;
+}
+
 static HRESULT __attribute__((stdcall)) D3D9_QueryInterface(D3D9Proxy* self, const GUID* riid, void** ppv) {
   if (!ppv) return E_POINTER;
   if (self && self->magic == PROXY_MAGIC_D3D9 &&
@@ -1688,11 +1861,21 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
   if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
     copy_presentation_parameters(&forced_pp, pPresentationParameters);
     make_windowed_presentation(&forced_pp, hFocusWindow);
+    if (poptbm_force_auto_depth_for_remix()) make_auto_depth_presentation(&forced_pp);
     pp_to_use = &forced_pp;
     forced = 1;
   }
 
   hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, &real_dev);
+  if (FAILED(hr) && forced && pp_to_use && pp_to_use->EnableAutoDepthStencil && pPresentationParameters && !pPresentationParameters->EnableAutoDepthStencil) {
+    HRESULT hr_first = hr;
+    real_dev = NULL;
+    copy_presentation_parameters(&forced_pp, pPresentationParameters);
+    make_windowed_presentation(&forced_pp, hFocusWindow);
+    pp_to_use = &forced_pp;
+    hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, &real_dev);
+    log_depth_retry(self ? self->create_call_index : 0, hr_first, hr);
+  }
   log_device_create("CreateDevice", self && self->is_remix_backend ? "remix" : "system", self ? self->create_call_index : 0, pp_to_use, BehaviorFlags, hr, forced);
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
@@ -1725,12 +1908,23 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UIN
   if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
     copy_presentation_parameters(&forced_pp, pPresentationParameters);
     make_windowed_presentation(&forced_pp, hFocusWindow);
+    if (poptbm_force_auto_depth_for_remix()) make_auto_depth_presentation(&forced_pp);
     pp_to_use = &forced_pp;
     mode_to_use = NULL;
     forced = 1;
   }
 
   hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, mode_to_use, &real_dev);
+  if (FAILED(hr) && forced && pp_to_use && pp_to_use->EnableAutoDepthStencil && pPresentationParameters && !pPresentationParameters->EnableAutoDepthStencil) {
+    HRESULT hr_first = hr;
+    real_dev = NULL;
+    copy_presentation_parameters(&forced_pp, pPresentationParameters);
+    make_windowed_presentation(&forced_pp, hFocusWindow);
+    pp_to_use = &forced_pp;
+    mode_to_use = NULL;
+    hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, mode_to_use, &real_dev);
+    log_depth_retry(self ? self->create_call_index : 0, hr_first, hr);
+  }
   log_device_create("CreateDeviceEx", self && self->is_remix_backend ? "remix" : "system", self ? self->create_call_index : 0, pp_to_use, BehaviorFlags, hr, forced);
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
@@ -1845,6 +2039,7 @@ static HRESULT __attribute__((stdcall)) Device_SetFVF(DeviceProxy* self, DWORD f
   self->using_game_decl = 0;
   if ((fvf & D3DFVF_XYZRHW) && ensure_rhw_decl(self, fvf)) {
     self->rhw_active = 1;
+    log_stream_repair(self->create_call_index, "FVF_XYZRHW");
     apply_rhw_camera(self);
     return call_set_vertex_declaration(self->real, self->rhw_decl);
   }
@@ -1866,13 +2061,52 @@ static HRESULT __attribute__((stdcall)) Device_GetFVF(DeviceProxy* self, DWORD* 
 }
 
 static HRESULT __attribute__((stdcall)) Device_CreateVertexDeclaration(DeviceProxy* self, const D3DVERTEXELEMENT9* pVertexElements, IDirect3DVertexDeclaration9** ppDecl) {
-  return call_create_vertex_declaration(self ? self->real : NULL, pVertexElements, ppDecl);
+  D3DVERTEXELEMENT9 fixed_elems[MAX_VERTEX_DECL_ELEMENTS];
+  IDirect3DVertexDeclaration9* real_decl = NULL;
+  IDirect3DVertexDeclaration9* remix_decl = NULL;
+  HRESULT hr;
+  VertexDeclProxy* wrapped;
+  int transformed;
+  if (!ppDecl) return E_POINTER;
+  *ppDecl = NULL;
+  hr = call_create_vertex_declaration(self ? self->real : NULL, pVertexElements, &real_decl);
+  if (FAILED(hr) || !real_decl || !self || !poptbm_enable_rhw_fixup()) {
+    *ppDecl = real_decl;
+    return hr;
+  }
+  transformed = build_positiont_vertex_declaration(pVertexElements, fixed_elems, MAX_VERTEX_DECL_ELEMENTS);
+  if (!transformed) {
+    *ppDecl = real_decl;
+    return hr;
+  }
+  if (FAILED(call_create_vertex_declaration(self->real, fixed_elems, &remix_decl)) || !remix_decl) {
+    *ppDecl = real_decl;
+    return hr;
+  }
+  wrapped = wrap_vertex_decl(self, real_decl, remix_decl, 1);
+  if (!wrapped) {
+    call_release(remix_decl);
+    *ppDecl = real_decl;
+    return hr;
+  }
+  log_stream_repair(self->create_call_index, "POSITIONT_DECL");
+  *ppDecl = (IDirect3DVertexDeclaration9*)wrapped;
+  return hr;
 }
 
 static HRESULT __attribute__((stdcall)) Device_SetVertexDeclaration(DeviceProxy* self, IDirect3DVertexDeclaration9* pDecl) {
   if (!self) return E_POINTER;
   self->using_game_decl = 1;
   self->rhw_active = 0;
+  if (is_vertex_decl_proxy(pDecl)) {
+    VertexDeclProxy* d = (VertexDeclProxy*)pDecl;
+    if (d->transformed_position) {
+      self->rhw_active = 1;
+      apply_rhw_camera(self);
+      return call_set_vertex_declaration(self->real, d->remix_decl);
+    }
+    return call_set_vertex_declaration(self->real, d->real_decl);
+  }
   return call_set_vertex_declaration(self->real, pDecl);
 }
 
@@ -2075,6 +2309,11 @@ static void init_proxy_vtables(void) {
   g_device_vtbl[131] = (void*)DeviceForward_131;
   g_device_vtbl[132] = (void*)DeviceForward_132;
   g_device_vtbl[133] = (void*)DeviceForward_133;
+  g_decl_vtbl[0] = (void*)VertexDecl_QueryInterface;
+  g_decl_vtbl[1] = (void*)VertexDecl_AddRef;
+  g_decl_vtbl[2] = (void*)VertexDecl_Release;
+  g_decl_vtbl[3] = (void*)VertexDecl_GetDevice;
+  g_decl_vtbl[4] = (void*)VertexDecl_GetDeclaration;
   g_proxy_vtables_init = 1;
 }
 
