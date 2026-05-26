@@ -174,14 +174,16 @@ Changed files in this branch:
 - `d3d9-selector.ini`
 - `d3d9.dll`
 - `docs/crash-analysis.md`
+- `docs/current-crash-fix.md`
+- `docs/current-status.md`
 - `docs/validation.md`
 - `src/d3d9-remix-selector/d3d9_remix_selector.c`
 
 Required runtime release checks:
 
 1. Start `MultiverseLauncher.exe` and confirm it loads system D3D9, not Remix.
-2. Start `popTBM.exe` and confirm the first two D3D9 creates use system D3D9 with the default `d3d9-selector.ini`.
-3. Confirm the next `popTBM.exe` D3D9 create uses `d3d9-remix.dll` and returns a wrapped D3D9 object.
+2. Start `popTBM.exe` and confirm the first three D3D9 creates use system D3D9 with the default `d3d9-selector.ini`.
+3. Confirm the next `popTBM.exe` D3D9 create, or an auto-depth gameplay device promoted from a deferred system object, uses `d3d9-remix.dll` and returns a wrapped D3D9 object.
 4. Confirm `D3DPopTB.exe` and `popTB.exe` create calls use `d3d9-remix.dll` and return wrapped D3D9 objects.
 5. Temporarily remove or rename `d3d9-remix.dll` and confirm all game create calls fall back to unwrapped system D3D9.
 6. In the Multiverse `direct3d9` renderer path, confirm RHW/pre-transformed draw warnings are reduced or identify the next interception point.

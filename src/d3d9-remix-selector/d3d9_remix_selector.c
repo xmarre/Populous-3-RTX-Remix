@@ -30,6 +30,7 @@ typedef void*              PVOID;
 typedef void*              HMODULE;
 typedef void*              HINSTANCE;
 typedef void*              FARPROC;
+typedef void*              HANDLE;
 typedef const char*        LPCSTR;
 typedef WCHAR*             LPWSTR;
 typedef const WCHAR*       LPCWSTR;
@@ -43,6 +44,9 @@ typedef DWORD   (__attribute__((stdcall)) *PFN_GetModuleFileNameW)(HMODULE, LPWS
 typedef UINT    (__attribute__((stdcall)) *PFN_GetSystemDirectoryW)(LPWSTR, UINT);
 typedef UINT    (__attribute__((stdcall)) *PFN_GetPrivateProfileIntW)(LPCWSTR, LPCWSTR, UINT, LPCWSTR);
 typedef void    (__attribute__((stdcall)) *PFN_RaiseException)(DWORD, DWORD, DWORD, const PVOID*);
+typedef HANDLE  (__attribute__((stdcall)) *PFN_CreateFileW)(LPCWSTR, DWORD, DWORD, PVOID, DWORD, DWORD, HANDLE);
+typedef BOOL    (__attribute__((stdcall)) *PFN_WriteFile)(HANDLE, const void*, DWORD, DWORD*, PVOID);
+typedef BOOL    (__attribute__((stdcall)) *PFN_CloseHandle)(HANDLE);
 
 typedef struct LIST_ENTRY_ {
   struct LIST_ENTRY_* Flink;
@@ -189,6 +193,9 @@ static PFN_GetModuleFileNameW pGetModuleFileNameW = NULL;
 static PFN_GetSystemDirectoryW pGetSystemDirectoryW = NULL;
 static PFN_GetPrivateProfileIntW pGetPrivateProfileIntW = NULL;
 static PFN_RaiseException pRaiseException = NULL;
+static PFN_CreateFileW pCreateFileW = NULL;
+static PFN_WriteFile pWriteFile = NULL;
+static PFN_CloseHandle pCloseHandle = NULL;
 static unsigned int g_last_selected_create_call = 0;
 
 void MissingExportFailure_stub(void);
@@ -385,7 +392,7 @@ static int ensure_kernel_functions(void) {
   HMODULE k32;
   HMODULE kb;
 
-  if (pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pGetPrivateProfileIntW && pRaiseException) return 1;
+  if (pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pGetPrivateProfileIntW && pRaiseException && pCreateFileW && pWriteFile && pCloseHandle) return 1;
 
   k32 = find_loaded_module_w(KERNEL32_DLL);
   kb = find_loaded_module_w(KERNELBASE_DLL);
@@ -414,8 +421,20 @@ static int ensure_kernel_functions(void) {
     pRaiseException = (PFN_RaiseException)resolve_export(k32, "RaiseException");
     if (!pRaiseException) pRaiseException = (PFN_RaiseException)resolve_export(kb, "RaiseException");
   }
+  if (!pCreateFileW) {
+    pCreateFileW = (PFN_CreateFileW)resolve_export(k32, "CreateFileW");
+    if (!pCreateFileW) pCreateFileW = (PFN_CreateFileW)resolve_export(kb, "CreateFileW");
+  }
+  if (!pWriteFile) {
+    pWriteFile = (PFN_WriteFile)resolve_export(k32, "WriteFile");
+    if (!pWriteFile) pWriteFile = (PFN_WriteFile)resolve_export(kb, "WriteFile");
+  }
+  if (!pCloseHandle) {
+    pCloseHandle = (PFN_CloseHandle)resolve_export(k32, "CloseHandle");
+    if (!pCloseHandle) pCloseHandle = (PFN_CloseHandle)resolve_export(kb, "CloseHandle");
+  }
 
-  return pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pRaiseException;
+  return pLoadLibraryW && pGetProcAddress && pGetModuleFileNameW && pGetSystemDirectoryW && pGetPrivateProfileIntW && pRaiseException && pCreateFileW && pWriteFile && pCloseHandle;
 }
 
 static unsigned int wide_len(const WCHAR* s) {
@@ -571,6 +590,102 @@ static HMODULE ensure_remix_d3d9(void) {
 }
 
 
+#define FILE_APPEND_DATA      0x00000004u
+#define FILE_SHARE_READ       0x00000001u
+#define FILE_SHARE_WRITE      0x00000002u
+#define OPEN_ALWAYS           4u
+#define FILE_ATTRIBUTE_NORMAL 0x00000080u
+#define INVALID_HANDLE_VALUE_LOCAL ((HANDLE)(LONG)-1)
+
+static unsigned int ascii_len_local(const char* s) {
+  unsigned int n = 0;
+  if (!s) return 0;
+  while (s[n]) ++n;
+  return n;
+}
+
+static int get_selector_log_path(WCHAR* path, DWORD cap) {
+  static const WCHAR LOG_NAME[] = { '\\','d','3','d','9','-','s','e','l','e','c','t','o','r','.','l','o','g',0 };
+  if (!path || cap < 2) return 0;
+  path[0] = 0;
+  if (!get_module_file_name_checked((HMODULE)g_self_module, path, cap)) return 0;
+  directory_from_path(path);
+  wide_append(path, cap, LOG_NAME);
+  return path[0] != 0;
+}
+
+static void log_write_raw(const char* text, unsigned int len) {
+  WCHAR path[MAX_PATH_CHARS];
+  HANDLE h;
+  DWORD written = 0;
+  if (!text || !len || !ensure_kernel_functions() || !pCreateFileW || !pWriteFile || !pCloseHandle) return;
+  if (!get_selector_log_path(path, MAX_PATH_CHARS)) return;
+  h = pCreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+  if (!h || h == INVALID_HANDLE_VALUE_LOCAL) return;
+  pWriteFile(h, text, (DWORD)len, &written, NULL);
+  pCloseHandle(h);
+}
+
+static void log_write_text(const char* text) {
+  log_write_raw(text, ascii_len_local(text));
+}
+
+static void log_write_uint(UINT value) {
+  char buf[16];
+  unsigned int i = 0;
+  unsigned int j;
+  if (value == 0) {
+    log_write_raw("0", 1);
+    return;
+  }
+  while (value && i < sizeof(buf)) {
+    buf[i++] = (char)('0' + (value % 10));
+    value /= 10;
+  }
+  for (j = 0; j < i / 2; ++j) {
+    char t = buf[j];
+    buf[j] = buf[i - 1 - j];
+    buf[i - 1 - j] = t;
+  }
+  log_write_raw(buf, i);
+}
+
+static void log_write_hex32(DWORD value) {
+  static const char HEX[] = "0123456789ABCDEF";
+  char buf[10];
+  int i;
+  buf[0] = '0';
+  buf[1] = 'x';
+  for (i = 0; i < 8; ++i) {
+    buf[2 + i] = HEX[(value >> (28 - i * 4)) & 0xF];
+  }
+  log_write_raw(buf, 10);
+}
+
+static void log_create_selection(UINT create_call, const char* api, const char* backend, UINT defer_count) {
+  log_write_text("selector: ");
+  log_write_text(api);
+  log_write_text(" call=");
+  log_write_uint(create_call);
+  log_write_text(" deferCreates=");
+  log_write_uint(defer_count);
+  log_write_text(" backend=");
+  log_write_text(backend);
+  log_write_text("\r\n");
+}
+
+
+
+static void log_backend_promotion(UINT create_call, const char* reason, UINT ok) {
+  log_write_text("selector: promote d3dCreateCall=");
+  log_write_uint(create_call);
+  log_write_text(" reason=");
+  log_write_text(reason);
+  log_write_text(" result=");
+  log_write_text(ok ? "remix" : "failed");
+  log_write_text("\r\n");
+}
+
 static int get_selector_ini_path(WCHAR* path, DWORD cap) {
   static const WCHAR INI_NAME[] = { '\\','d','3','d','9','-','s','e','l','e','c','t','o','r','.','i','n','i',0 };
   if (!path || cap < 2) return 0;
@@ -594,8 +709,9 @@ static UINT read_selector_ini_uint(const WCHAR* section, const WCHAR* key, UINT 
 static UINT multiverse_defer_create_count(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'd','e','f','e','r','C','r','e','a','t','e','s',0 };
-  UINT value = read_selector_ini_uint(SECTION, KEY, 2, 16);
-  return value < 2 ? 2 : value;
+  UINT value = read_selector_ini_uint(SECTION, KEY, 3, 16);
+  if (value < 2) value = 2;
+  return value;
 }
 
 static UINT poptbm_force_windowed_for_remix(void) {
@@ -608,6 +724,12 @@ static UINT poptbm_enable_rhw_fixup(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'e','n','a','b','l','e','R','h','w','F','i','x','u','p',0 };
   return read_selector_ini_uint(SECTION, KEY, 0, 1);
+}
+
+static UINT poptbm_promote_system_device_with_auto_depth(void) {
+  static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
+  static const WCHAR KEY[] = { 'p','r','o','m','o','t','e','S','y','s','t','e','m','D','e','v','i','c','e','W','i','t','h','A','u','t','o','D','e','p','t','h',0 };
+  return read_selector_ini_uint(SECTION, KEY, 1, 1);
 }
 
 static HMODULE ensure_real_d3d9(void) {
@@ -637,9 +759,10 @@ static HMODULE ensure_real_d3d9(void) {
   return mod;
 }
 
-static HMODULE select_d3d9_for_create(void) {
+static HMODULE select_d3d9_for_create(const char* api_name) {
   HMODULE mod;
   unsigned int create_call;
+  UINT defer_count;
   int is_multiverse_game = is_multiverse_game_process();
   int is_game = is_game_process();
 
@@ -648,7 +771,9 @@ static HMODULE select_d3d9_for_create(void) {
   g_last_selected_create_call = create_call;
   unlock_proxy_state();
 
-  if (is_multiverse_game && create_call <= multiverse_defer_create_count()) {
+  defer_count = multiverse_defer_create_count();
+  if (is_multiverse_game && create_call <= defer_count) {
+    log_create_selection(create_call, api_name, "system", defer_count);
     return ensure_system_d3d9();
   }
 
@@ -659,10 +784,12 @@ static HMODULE select_d3d9_for_create(void) {
       g_remix_active = 1;
       g_real_d3d9 = mod;
       unlock_proxy_state();
+      log_create_selection(create_call, api_name, "remix", defer_count);
       return mod;
     }
   }
 
+  log_create_selection(create_call, api_name, "system-fallback", defer_count);
   return ensure_system_d3d9();
 }
 
@@ -836,6 +963,36 @@ typedef struct D3DPRESENT_PARAMETERS_ {
   UINT PresentationInterval;
 } D3DPRESENT_PARAMETERS;
 
+static void log_device_create(const char* api, const char* backend, UINT create_call, const D3DPRESENT_PARAMETERS* pp, DWORD behavior, HRESULT hr, UINT forced_windowed) {
+  log_write_text("selector: ");
+  log_write_text(api);
+  log_write_text(" d3dCreateCall=");
+  log_write_uint(create_call);
+  log_write_text(" backend=");
+  log_write_text(backend);
+  log_write_text(" forcedWindowed=");
+  log_write_uint(forced_windowed);
+  log_write_text(" behavior=");
+  log_write_hex32(behavior);
+  if (pp) {
+    log_write_text(" w=");
+    log_write_uint(pp->BackBufferWidth);
+    log_write_text(" h=");
+    log_write_uint(pp->BackBufferHeight);
+    log_write_text(" windowed=");
+    log_write_uint((UINT)pp->Windowed);
+    log_write_text(" depth=");
+    log_write_uint((UINT)pp->EnableAutoDepthStencil);
+    log_write_text(" refresh=");
+    log_write_uint(pp->FullScreen_RefreshRateInHz);
+  }
+  log_write_text(" hr=");
+  log_write_hex32((DWORD)hr);
+  log_write_text("\r\n");
+}
+
+
+
 typedef struct D3DVIEWPORT9_ {
   DWORD X;
   DWORD Y;
@@ -913,6 +1070,8 @@ typedef struct D3D9Proxy_ {
   void* real;
   DWORD magic;
   int is_ex;
+  int is_remix_backend;
+  UINT sdk_version;
   unsigned int create_call_index;
 } D3D9Proxy;
 
@@ -1136,7 +1295,7 @@ static void make_windowed_presentation(D3DPRESENT_PARAMETERS* pp, HWND fallback_
 }
 
 static int should_force_windowed_for_remix_create(const D3D9Proxy* self) {
-  return self && is_multiverse_game_process() && poptbm_force_windowed_for_remix();
+  return self && self->is_remix_backend && is_multiverse_game_process() && poptbm_force_windowed_for_remix();
 }
 
 static int ensure_rhw_decl(DeviceProxy* self, DWORD fvf) {
@@ -1179,7 +1338,7 @@ static void apply_rhw_state_for_draw(DeviceProxy* self) {
   call_set_vertex_declaration(self->real, self->rhw_decl);
 }
 
-static D3D9Proxy* wrap_d3d9_object(void* real, int is_ex) {
+static D3D9Proxy* wrap_d3d9_object(void* real, int is_ex, int is_remix_backend) {
   unsigned int i;
   D3D9Proxy* wrapped = NULL;
   if (!real) return NULL;
@@ -1191,6 +1350,8 @@ static D3D9Proxy* wrap_d3d9_object(void* real, int is_ex) {
       g_d3d9_proxy_pool[i].real = real;
       g_d3d9_proxy_pool[i].magic = PROXY_MAGIC_D3D9;
       g_d3d9_proxy_pool[i].is_ex = is_ex;
+      g_d3d9_proxy_pool[i].is_remix_backend = is_remix_backend;
+      g_d3d9_proxy_pool[i].sdk_version = 0;
       g_d3d9_proxy_pool[i].create_call_index = g_last_selected_create_call;
       wrapped = &g_d3d9_proxy_pool[i];
       break;
@@ -1239,6 +1400,70 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
   }
   unlock_proxy_state();
   return wrapped;
+}
+
+
+static int promote_system_proxy_to_remix_for_device(D3D9Proxy* self, const D3DPRESENT_PARAMETERS* pp) {
+  HMODULE remix;
+  FARPROC proc;
+  void* remix_real = NULL;
+  HRESULT hr;
+  PFN_Direct3DCreate9_Real fn9;
+  PFN_Direct3DCreate9Ex_Real fn9ex;
+
+  if (!self || self->magic != PROXY_MAGIC_D3D9 || self->is_remix_backend) return 0;
+  if (!is_multiverse_game_process()) return 0;
+  if (!poptbm_promote_system_device_with_auto_depth()) return 0;
+  if (!pp || !pp->EnableAutoDepthStencil) return 0;
+
+  remix = ensure_remix_d3d9();
+  if (!remix) {
+    log_backend_promotion(self->create_call_index, "autoDepth", 0);
+    return 0;
+  }
+
+  if (self->is_ex) {
+    proc = get_proc_by_name_or_ordinal(remix, "Direct3DCreate9Ex", 38);
+    if (!proc) proc = get_proc_by_name_or_ordinal(remix, "Direct3DCreate9Ex", 14);
+    if (!proc) {
+      log_backend_promotion(self->create_call_index, "autoDepth", 0);
+      return 0;
+    }
+    fn9ex = (PFN_Direct3DCreate9Ex_Real)proc;
+    hr = fn9ex(self->sdk_version, &remix_real);
+    if (FAILED(hr) || !remix_real) {
+      log_backend_promotion(self->create_call_index, "autoDepth", 0);
+      return 0;
+    }
+  } else {
+    proc = get_proc_by_name_or_ordinal(remix, "Direct3DCreate9", 37);
+    if (!proc) proc = get_proc_by_name_or_ordinal(remix, "Direct3DCreate9", 13);
+    if (!proc) {
+      log_backend_promotion(self->create_call_index, "autoDepth", 0);
+      return 0;
+    }
+    fn9 = (PFN_Direct3DCreate9_Real)proc;
+    remix_real = fn9(self->sdk_version);
+    if (!remix_real) {
+      log_backend_promotion(self->create_call_index, "autoDepth", 0);
+      return 0;
+    }
+  }
+
+  /* Keep the old system IDirect3D9 object alive rather than risking refcount
+   * mismatch if the game queried extra references before the promotion. It has
+   * no device ownership once CreateDevice is routed to Remix, so this is a
+   * small bounded leak in exchange for not crossing back into the bridge during
+   * menu/game teardown.
+   */
+  self->real = remix_real;
+  self->is_remix_backend = 1;
+  lock_proxy_state();
+  g_remix_active = 1;
+  g_real_d3d9 = remix;
+  unlock_proxy_state();
+  log_backend_promotion(self->create_call_index, "autoDepth", 1);
+  return 1;
 }
 
 __attribute__((naked)) void D3D9Forward_3(void) { __asm__("movl 4(%esp), %eax\n\t" "movl 4(%eax), %ecx\n\t" "movl %ecx, 4(%esp)\n\t" "movl (%ecx), %edx\n\t" "jmp *12(%edx)\n"); }
@@ -1401,6 +1626,8 @@ static ULONG __attribute__((stdcall)) D3D9_Release(D3D9Proxy* self) {
     self->lpVtbl = NULL;
     self->magic = 0;
     self->is_ex = 0;
+    self->is_remix_backend = 0;
+    self->sdk_version = 0;
     self->create_call_index = 0;
     unlock_proxy_state();
   }
@@ -1445,25 +1672,32 @@ static HRESULT __attribute__((stdcall)) D3D9_GetAdapterDisplayModeEx(D3D9Proxy* 
 
 static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags, D3DPRESENT_PARAMETERS* pPresentationParameters, IDirect3DDevice9** ppReturnedDeviceInterface) {
   void* real_dev = NULL;
-  void** vt = self && self->real ? *(void***)self->real : NULL;
-  HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**))vt[16] : NULL;
+  void** vt;
+  HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**);
   HRESULT hr;
   DeviceProxy* wrapped;
   D3DPRESENT_PARAMETERS forced_pp;
   D3DPRESENT_PARAMETERS* pp_to_use = pPresentationParameters;
-  if (!fn || !ppReturnedDeviceInterface) return E_POINTER;
+  UINT forced = 0;
+  if (!ppReturnedDeviceInterface) return E_POINTER;
+  promote_system_proxy_to_remix_for_device(self, pPresentationParameters);
+  vt = self && self->real ? *(void***)self->real : NULL;
+  fn = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,void**))vt[16] : NULL;
+  if (!fn) return E_POINTER;
 
   if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
     copy_presentation_parameters(&forced_pp, pPresentationParameters);
     make_windowed_presentation(&forced_pp, hFocusWindow);
     pp_to_use = &forced_pp;
+    forced = 1;
   }
 
   hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, &real_dev);
+  log_device_create("CreateDevice", self && self->is_remix_backend ? "remix" : "system", self ? self->create_call_index : 0, pp_to_use, BehaviorFlags, hr, forced);
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
   }
-  if (FAILED(hr) || !real_dev || !poptbm_enable_rhw_fixup()) {
+  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || !poptbm_enable_rhw_fixup()) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
@@ -1474,27 +1708,34 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
 
 static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UINT Adapter, D3DDEVTYPE DeviceType, HWND hFocusWindow, DWORD BehaviorFlags, D3DPRESENT_PARAMETERS* pPresentationParameters, D3DDISPLAYMODEEX* pFullscreenDisplayMode, IDirect3DDevice9** ppReturnedDeviceInterface) {
   void* real_dev = NULL;
-  void** vt = self && self->real ? *(void***)self->real : NULL;
-  HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**) = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**))vt[20] : NULL;
+  void** vt;
+  HRESULT (__attribute__((stdcall)) *fn)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**);
   HRESULT hr;
   DeviceProxy* wrapped;
   D3DPRESENT_PARAMETERS forced_pp;
   D3DPRESENT_PARAMETERS* pp_to_use = pPresentationParameters;
   D3DDISPLAYMODEEX* mode_to_use = pFullscreenDisplayMode;
-  if (!fn || !ppReturnedDeviceInterface) return E_POINTER;
+  UINT forced = 0;
+  if (!ppReturnedDeviceInterface) return E_POINTER;
+  promote_system_proxy_to_remix_for_device(self, pPresentationParameters);
+  vt = self && self->real ? *(void***)self->real : NULL;
+  fn = vt ? (HRESULT (__attribute__((stdcall)) *)(void*,UINT,D3DDEVTYPE,HWND,DWORD,D3DPRESENT_PARAMETERS*,D3DDISPLAYMODEEX*,void**))vt[20] : NULL;
+  if (!fn) return E_POINTER;
 
   if (pPresentationParameters && should_force_windowed_for_remix_create(self)) {
     copy_presentation_parameters(&forced_pp, pPresentationParameters);
     make_windowed_presentation(&forced_pp, hFocusWindow);
     pp_to_use = &forced_pp;
     mode_to_use = NULL;
+    forced = 1;
   }
 
   hr = fn(self->real, Adapter, DeviceType, hFocusWindow, BehaviorFlags, pp_to_use, mode_to_use, &real_dev);
+  log_device_create("CreateDeviceEx", self && self->is_remix_backend ? "remix" : "system", self ? self->create_call_index : 0, pp_to_use, BehaviorFlags, hr, forced);
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
   }
-  if (FAILED(hr) || !real_dev || !poptbm_enable_rhw_fixup()) {
+  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || !poptbm_enable_rhw_fixup()) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
@@ -1844,7 +2085,7 @@ void* __attribute__((stdcall)) Direct3DCreate9_proxy(UINT SDKVersion) {
   void* real;
   D3D9Proxy* wrapped;
   init_proxy_vtables();
-  selected = select_d3d9_for_create();
+  selected = select_d3d9_for_create("Direct3DCreate9");
   proc = get_proc_by_name_or_ordinal(selected, "Direct3DCreate9", 37);
   if (!proc) proc = get_proc_by_name_or_ordinal(selected, "Direct3DCreate9", 13);
   if (!proc) {
@@ -1858,8 +2099,9 @@ void* __attribute__((stdcall)) Direct3DCreate9_proxy(UINT SDKVersion) {
   }
   fn = (PFN_Direct3DCreate9_Real)proc;
   real = fn(SDKVersion);
-  if (!real || !is_game_process() || selected != g_remix_d3d9) return real;
-  wrapped = wrap_d3d9_object(real, 0);
+  if (!real || !is_game_process()) return real;
+  wrapped = wrap_d3d9_object(real, 0, (selected == g_remix_d3d9 && g_remix_d3d9 != NULL));
+  if (wrapped) wrapped->sdk_version = SDKVersion;
   return wrapped ? (void*)wrapped : real;
 }
 
@@ -1873,7 +2115,7 @@ HRESULT __attribute__((stdcall)) Direct3DCreate9Ex_proxy(UINT SDKVersion, void**
   if (!ppD3D9Ex) return E_POINTER;
   *ppD3D9Ex = NULL;
   init_proxy_vtables();
-  selected = select_d3d9_for_create();
+  selected = select_d3d9_for_create("Direct3DCreate9Ex");
   proc = get_proc_by_name_or_ordinal(selected, "Direct3DCreate9Ex", 38);
   if (!proc) proc = get_proc_by_name_or_ordinal(selected, "Direct3DCreate9Ex", 14);
   if (!proc) {
@@ -1887,11 +2129,12 @@ HRESULT __attribute__((stdcall)) Direct3DCreate9Ex_proxy(UINT SDKVersion, void**
   }
   fn = (PFN_Direct3DCreate9Ex_Real)proc;
   hr = fn(SDKVersion, &real);
-  if (FAILED(hr) || !real || !is_game_process() || selected != g_remix_d3d9) {
+  if (FAILED(hr) || !real || !is_game_process()) {
     *ppD3D9Ex = real;
     return hr;
   }
-  wrapped = wrap_d3d9_object(real, 1);
+  wrapped = wrap_d3d9_object(real, 1, (selected == g_remix_d3d9 && g_remix_d3d9 != NULL));
+  if (wrapped) wrapped->sdk_version = SDKVersion;
   *ppD3D9Ex = wrapped ? (void*)wrapped : real;
   return hr;
 }

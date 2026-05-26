@@ -51,4 +51,4 @@ Observed bridge sequence: Remix initializes in `popTBM.exe`, creates a D3D9 devi
 
 Root cause handled here: the RHW proxy was being allowed to attach to the same temporary startup/movie D3D9 devices that are destroyed before the real game/menu renderer is stable. Those devices should not be modified by the RHW fixup at all.
 
-Fix: `popTBM.exe` now defers Remix for the first configurable number of `Direct3DCreate9` / `Direct3DCreate9Ex` calls. Default: `deferCreates=2` in `d3d9-selector.ini`. The selector-owned RHW vertex declaration is also released before the underlying device reaches refcount zero to avoid late child-resource destruction during bridge module teardown.
+Fix: `popTBM.exe` now defers Remix for the first configurable number of `Direct3DCreate9` / `Direct3DCreate9Ex` calls. Default: `deferCreates=3` in `d3d9-selector.ini`. The selector-owned RHW vertex declaration is also released before the underlying device reaches refcount zero to avoid late child-resource destruction during bridge module teardown.

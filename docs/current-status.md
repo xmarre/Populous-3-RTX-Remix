@@ -7,7 +7,7 @@ The bridge log shows Remix creating a D3D9Ex device during the black-screen/menu
 The current package therefore fixes the D3D9 presentation path first:
 
 - `MultiverseLauncher.exe` still receives system D3D9.
-- The first two `popTBM.exe` D3D9 create calls still receive system D3D9.
+- The first three `popTBM.exe` D3D9 create calls still receive system D3D9.
 - Later `popTBM.exe` D3D9 create calls receive RTX Remix.
 - Those Remix create calls are forced to windowed presentation parameters inside the selector before they reach `d3d9-remix.dll`.
 
