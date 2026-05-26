@@ -770,6 +770,38 @@ static UINT poptbm_trace_draw_limit(void) {
   return read_selector_ini_uint(SECTION, KEY, 256, 10000);
 }
 
+static UINT g_trace_d3d9_stream = 0;
+static UINT g_trace_draw_limit = 256;
+static volatile long g_trace_config_cached = 0;
+
+static void ensure_trace_config_cached(void) {
+  UINT trace_d3d9_stream;
+  UINT trace_limit;
+  if (g_trace_config_cached) return;
+
+  trace_d3d9_stream = poptbm_trace_d3d9_stream();
+  trace_limit = poptbm_trace_draw_limit();
+
+  lock_proxy_state();
+  if (!g_trace_config_cached) {
+    g_trace_d3d9_stream = trace_d3d9_stream;
+    g_trace_draw_limit = trace_limit;
+    __sync_synchronize();
+    g_trace_config_cached = 1;
+  }
+  unlock_proxy_state();
+}
+
+static UINT trace_d3d9_stream_enabled(void) {
+  ensure_trace_config_cached();
+  return g_trace_d3d9_stream;
+}
+
+static UINT trace_draw_limit(void) {
+  ensure_trace_config_cached();
+  return g_trace_draw_limit;
+}
+
 static HMODULE ensure_real_d3d9(void) {
   HMODULE mod;
   int remix_active;
@@ -1165,8 +1197,8 @@ typedef struct VertexDeclProxy_ {
 
 static int trace_stream_event_allowed(DeviceProxy* self) {
   UINT limit;
-  if (!self || !poptbm_trace_d3d9_stream()) return 0;
-  limit = poptbm_trace_draw_limit();
+  if (!self || !trace_d3d9_stream_enabled()) return 0;
+  limit = trace_draw_limit();
   if (self->trace_events >= limit) return 0;
   ++self->trace_events;
   return 1;
@@ -1523,6 +1555,7 @@ static DeviceProxy* wrap_device_object(void* real, D3D9Proxy* parent, const D3DP
   DeviceProxy* wrapped = NULL;
   if (!real) return NULL;
 
+  ensure_trace_config_cached();
   lock_proxy_state();
   for (i = 0; i < MAX_DEVICE_PROXIES; ++i) {
     if (!g_device_proxy_pool[i].real) {
@@ -1929,7 +1962,7 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDevice(D3D9Proxy* self, UINT 
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
   }
-  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || (!poptbm_enable_rhw_fixup() && !poptbm_trace_d3d9_stream())) {
+  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || (!poptbm_enable_rhw_fixup() && !trace_d3d9_stream_enabled())) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
@@ -1978,7 +2011,7 @@ static HRESULT __attribute__((stdcall)) D3D9_CreateDeviceEx(D3D9Proxy* self, UIN
   if (SUCCEEDED(hr) && real_dev && pp_to_use != pPresentationParameters) {
     copy_presentation_parameters(pPresentationParameters, pp_to_use);
   }
-  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || (!poptbm_enable_rhw_fixup() && !poptbm_trace_d3d9_stream())) {
+  if (FAILED(hr) || !real_dev || !self || !self->is_remix_backend || (!poptbm_enable_rhw_fixup() && !trace_d3d9_stream_enabled())) {
     *ppReturnedDeviceInterface = (IDirect3DDevice9*)real_dev;
     return hr;
   }
