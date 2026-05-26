@@ -15,6 +15,26 @@ lld-link /dll /machine:x86 /nodefaultlib \
   d3d9_remix_selector.obj
 ```
 
+Portable Zig build used for the current committed selector:
+
+```text
+ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache \
+ZIG_LOCAL_CACHE_DIR=/tmp/zig-local-cache \
+/tmp/zig-x86_64-linux-0.15.1/zig cc \
+  -target x86-windows-gnu \
+  -O2 \
+  -shared \
+  -nostdlib \
+  -fno-stack-protector \
+  -fno-sanitize=undefined \
+  -Wno-ignored-attributes \
+  src/d3d9-remix-selector/d3d9_remix_selector.c \
+  src/d3d9-remix-selector/d3d9_remix_selector.def \
+  -Wl,-e,DllMain@12 \
+  -Wl,--subsystem,windows \
+  -o d3d9.dll
+```
+
 Expected result:
 
 ```text
@@ -87,7 +107,7 @@ The selector DLL has no import table. It resolves `kernel32`/`kernelbase` export
 SHA-256 of the included selector:
 
 ```text
-7c7818d937f1b3c11b373f2eeadc60443d8907ac8bd3d37b6c65f97e9beb85ab  d3d9.dll
+688b0e8157a4d5aaaeaac319fd8e1008ae2dc7125f2eccdaa5a03aa0217307bd  d3d9.dll
 ```
 
 ## Selector binary included
@@ -106,15 +126,12 @@ Not validated here: live Windows runtime behavior with Multiverse Launcher, beca
 
 ## Current source validation note
 
-This branch changes the selector source and export manifest, but the attached
-patches did not include binary patch data for the root `d3d9.dll`. The local
-environment also does not provide `clang`, `lld-link`, or `i686-w64-mingw32-gcc`,
-so the committed selector DLL could not be regenerated here. Rebuild
-`d3d9.dll` with the commands above before packaging or runtime testing.
+This branch changes the selector source and export manifest. The root
+`d3d9.dll` has been rebuilt from that source with the portable Zig command
+above.
 
-Do not package this branch as a runtime-ready release until the root
-`d3d9.dll` has been rebuilt from the current source and the checks below have
-been repeated against that rebuilt DLL.
+Do not package this branch as a runtime-ready release until the checks below
+have been repeated against the rebuilt DLL in the target game environment.
 
 Static routing audit for the current source:
 
@@ -131,7 +148,7 @@ prevents a first system-D3D9 resolution from pinning later create calls to the
 system DLL. If Remix is missing or the selected module cannot provide the create
 export, the fallback path resolves system D3D9 and returns it unwrapped.
 
-Required runtime release checks after rebuilding:
+Required runtime release checks:
 
 1. Start `MultiverseLauncher.exe` and confirm it loads system D3D9, not Remix.
 2. Start `popTBM.exe` and confirm the first D3D9 create uses system D3D9.
