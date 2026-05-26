@@ -15,6 +15,26 @@ lld-link /dll /machine:x86 /nodefaultlib \
   d3d9_remix_selector.obj
 ```
 
+Portable Zig build used for the current committed selector:
+
+```text
+ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache \
+ZIG_LOCAL_CACHE_DIR=/tmp/zig-local-cache \
+/tmp/zig-x86_64-linux-0.15.1/zig cc \
+  -target x86-windows-gnu \
+  -O2 \
+  -shared \
+  -nostdlib \
+  -fno-stack-protector \
+  -fno-sanitize=undefined \
+  -Wno-ignored-attributes \
+  src/d3d9-remix-selector/d3d9_remix_selector.c \
+  src/d3d9-remix-selector/d3d9_remix_selector.def \
+  -Wl,-e,DllMain@12 \
+  -Wl,--subsystem,windows \
+  -o d3d9.dll
+```
+
 Expected result:
 
 ```text
@@ -87,7 +107,7 @@ The selector DLL has no import table. It resolves `kernel32`/`kernelbase` export
 SHA-256 of the included selector:
 
 ```text
-7c7818d937f1b3c11b373f2eeadc60443d8907ac8bd3d37b6c65f97e9beb85ab  d3d9.dll
+996ceb17a185fd2221703a073183044071ff7c61373f4e34dad977c58c7f202a  d3d9.dll
 ```
 
 ## Selector binary included
@@ -103,3 +123,50 @@ Install checklist:
 ```
 
 Not validated here: live Windows runtime behavior with Multiverse Launcher, because the container cannot run Windows executables.
+
+## Current source validation note
+
+This branch changes the selector source and export manifest. The root
+`d3d9.dll` has been rebuilt from that source with the portable Zig command
+above after the review fixes in this branch. Re-running that command from the
+current tree produced the hash recorded above.
+
+Do not package this branch as a runtime-ready release until the checks below
+have been repeated against the rebuilt DLL in the target game environment.
+
+Static routing audit for the current source:
+
+| Process | First `Direct3DCreate9` / `Direct3DCreate9Ex` | Later create calls | Wrapped for RHW fixup |
+| --- | --- | --- | --- |
+| `MultiverseLauncher.exe` | system D3D9 | system D3D9 | no |
+| `popTBM.exe` | system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+| `D3DPopTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+| `popTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+
+The create entry points call `select_d3d9_for_create()` directly instead of the
+generic export cache. That preserves the `popTBM.exe` first-create deferral and
+prevents a first system-D3D9 resolution from pinning later create calls to the
+system DLL. If Remix is missing or the selected module cannot provide the create
+export, the fallback path resolves system D3D9 and returns it unwrapped.
+
+Static concurrency audit for the current source:
+
+- `select_d3d9_for_create()` snapshots the process classification, increments
+  `g_direct3d_create_calls` while holding the selector spin lock, and uses the
+  local increment result for the `popTBM.exe` first-create decision.
+- `g_remix_active`, `g_real_d3d9`, `g_system_d3d9`, and `g_remix_d3d9` are read
+  and written while holding the same lock; DLL loads happen outside the lock,
+  then the selected module pointer is published under the lock.
+- `D3D9_Release()` clears its proxy slot when the forwarded COM `Release`
+  returns zero.
+- `Device_Release()` releases the cached RHW vertex declaration and clears its
+  proxy slot when the forwarded COM `Release` returns zero.
+
+Required runtime release checks:
+
+1. Start `MultiverseLauncher.exe` and confirm it loads system D3D9, not Remix.
+2. Start `popTBM.exe` and confirm the first D3D9 create uses system D3D9.
+3. Confirm the next `popTBM.exe` D3D9 create uses `d3d9-remix.dll` and returns a wrapped D3D9 object.
+4. Confirm `D3DPopTB.exe` and `popTB.exe` create calls use `d3d9-remix.dll` and return wrapped D3D9 objects.
+5. Temporarily remove or rename `d3d9-remix.dll` and confirm all game create calls fall back to unwrapped system D3D9.
+6. In the Multiverse `direct3d9` renderer path, confirm RHW/pre-transformed draw warnings are reduced or identify the next interception point.
