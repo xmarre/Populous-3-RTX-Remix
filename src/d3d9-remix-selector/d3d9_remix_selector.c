@@ -513,9 +513,9 @@ static int get_process_basename(WCHAR* exe_name, DWORD cap) {
 }
 
 static int is_game_process(void) {
-  static const WCHAR POPTBM_EXE[]   = { 'p','o','p','T','B','M','.','e','x','e',0 };
-  static const WCHAR D3DPOPTB_EXE[] = { 'D','3','D','P','o','p','T','B','.','e','x','e',0 };
-  static const WCHAR POPTB_EXE[]    = { 'p','o','p','T','B','.','e','x','e',0 };
+  static const WCHAR POPTBM_EXE[]        = { 'p','o','p','T','B','M','.','e','x','e',0 };
+  static const WCHAR D3DPOPTB_EXE[]      = { 'D','3','D','P','o','p','T','B','.','e','x','e',0 };
+  static const WCHAR POPTB_EXE[]         = { 'p','o','p','T','B','.','e','x','e',0 };
   WCHAR exe_name[MAX_PATH_CHARS];
 
   if (!get_process_basename(exe_name, MAX_PATH_CHARS)) return 0;
@@ -617,7 +617,7 @@ static int get_selector_log_path(WCHAR* path, DWORD cap) {
 
 static void log_start_session_once(void) {
   static const char HEADER[] =
-    "selector: session build=gameplay-call5-focused-trace deferDefault=4 rhwMutateDefault=0\r\n";
+    "selector: session build=hardware-dx7to9-route deferDefault=3 rhwMutateDefault=0 hardwareExeSupport=1\r\n";
   WCHAR path[MAX_PATH_CHARS];
   HANDLE h;
   DWORD written = 0;
@@ -762,7 +762,7 @@ static UINT read_selector_ini_uint(const WCHAR* section, const WCHAR* key, UINT 
 static UINT multiverse_defer_create_count(void) {
   static const WCHAR SECTION[] = { 'p','o','p','T','B','M',0 };
   static const WCHAR KEY[] = { 'd','e','f','e','r','C','r','e','a','t','e','s',0 };
-  UINT value = read_selector_ini_uint(SECTION, KEY, 4, 16);
+  UINT value = read_selector_ini_uint(SECTION, KEY, 3, 16);
   if (value < 2) value = 2;
   return value;
 }

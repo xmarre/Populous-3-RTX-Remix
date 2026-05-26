@@ -193,3 +193,15 @@ See `docs/d3d9-rhw-fixup.md` for the D3D9 stream repair path.
 The Multiverse D3D9 renderer is now reached after the unstable launcher/menu devices. The latest trace showed that Direct3DCreate9 call 4 is a screen-space final-blit path (`D3DFVF_XYZRHW | TEX1`, triangle-strip quads, depth/lighting off), so this package defaults to `deferCreates=4` and starts RTX Remix at the next D3D9 device.
 
 If gameplay still logs only `FINAL_BLIT_RHW`, Remix is attached to a 2D presentation stream, not to Populous world geometry. In that case the remaining work is not another `rtx.conf` tweak; the missing layer is the actual world-space renderer/camera data before Multiverse/cnc-ddraw collapses it into a final frame.
+
+## Current RTX Remix integration status
+
+The Multiverse `direct3d9` renderer is not a usable RTX Remix capture source.
+The selector trace proved that the visible frame is submitted to D3D9 as final
+screen-space `D3DFVF_XYZRHW | TEX1` quads (`FINAL_BLIT_RHW`), so RTX Remix can
+load but cannot see Populous world geometry/camera/depth.
+
+The current experimental route is `experimental/hardware-fix-dx7to9/`: apply the
+Windows 10/11 hardware-mode fix, use dxwrapper `Dd7to9` on the patched Populous
+runtime process, then feed that translated D3D9 stream into RTX Remix through
+this repo's selector.
