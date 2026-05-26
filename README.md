@@ -184,3 +184,9 @@ selector: streamRepair d3dCreateCall=... kind=POSITIONT_DECL
 ```
 
 See `docs/d3d9-rhw-fixup.md` for the D3D9 stream repair path.
+
+## Current D3D9 status
+
+The Multiverse D3D9 renderer is now reached after the unstable launcher/menu devices. The latest trace showed that Direct3DCreate9 call 4 is a screen-space final-blit path (`D3DFVF_XYZRHW | TEX1`, triangle-strip quads, depth/lighting off), so this package defaults to `deferCreates=4` and starts RTX Remix at the next D3D9 device.
+
+If gameplay still logs only `FINAL_BLIT_RHW`, Remix is attached to a 2D presentation stream, not to Populous world geometry. In that case the remaining work is not another `rtx.conf` tweak; the missing layer is the actual world-space renderer/camera data before Multiverse/cnc-ddraw collapses it into a final frame.

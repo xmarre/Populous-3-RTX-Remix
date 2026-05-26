@@ -1,17 +1,19 @@
-# Current status
+# Current status: Multiverse D3D9 path
 
-The selector/device-routing part is working:
+The selector now routes `MultiverseLauncher.exe` to system D3D9 and delays RTX Remix for `popTBM.exe` until after the unstable intro/menu D3D9 devices.
 
-- `MultiverseLauncher.exe` receives system D3D9.
-- the first three `popTBM.exe` D3D9 creates stay on system D3D9.
-- later `popTBM.exe` D3D9 creates route to `d3d9-remix.dll` and RTX Remix starts.
-- forced windowed mode prevents the menu/startup bridge teardown crash.
+The latest passive trace showed that the first Remix-routed device was not real world geometry. It submitted:
 
-The remaining blocker is the draw stream. The RHW rewrite experiment proved that
-Multiverse uses `D3DFVF_XYZRHW`, but mutating that stream into a fake normal
-`POSITION` declaration makes the menu black. That changed presentation state, not
-just Remix reconstruction state, so it is disabled again.
+```text
+FVF = 0x104 = D3DFVF_XYZRHW | TEX1
+DrawPrimitive primitiveType=TRIANGLESTRIP primitiveCount=2
+ZENABLE = 0
+LIGHTING = 0
+ALPHABLENDENABLE = 1
+```
 
-This build is passive tracing only: it logs transformed-position FVF/declaration
-usage, selected render states, and RHW draw calls while forwarding the original
-game stream unchanged.
+That is a screen-space textured quad / final presentation blit. RTX Remix can load there, but it cannot infer Populous world geometry, camera, materials, or lights from a final 2D frame.
+
+This package therefore changes the default from `deferCreates=3` to `deferCreates=4` so Remix skips that menu/presentation device and starts at the next D3D9 create call. That value is the packaged INI default and the compiled fallback when no INI override is present. It also keeps stream tracing passive and classifies repeated RHW quads as `FINAL_BLIT_RHW` instead of mutating them.
+
+If later gameplay devices still only log `FINAL_BLIT_RHW`, the Multiverse D3D9 renderer is a final blit path, not a Remix-compatible world-geometry path. A D3D9 DLL shim cannot reconstruct the missing world transform/camera from that stream.
