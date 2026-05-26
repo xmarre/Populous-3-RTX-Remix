@@ -102,12 +102,12 @@ Selector export manifest:
 | 37 | `Direct3DCreate9` |
 | 38 | `Direct3DCreate9Ex` |
 
-The selector DLL has no import table. It resolves `kernel32`/`kernelbase` exports through the process PEB, then loads either the renamed Remix bridge or the system D3D9 DLL by absolute path.
+The selector DLL has no import table. It resolves `kernel32`/`kernelbase` exports through the process PEB, then loads either the renamed Remix bridge or the system D3D9 DLL by absolute path. The rebuilt DLL was checked with `objdump -p d3d9.dll`; the import directory and import address table entries are both `00000000 00000000`.
 
 SHA-256 of the included selector:
 
 ```text
-996ceb17a185fd2221703a073183044071ff7c61373f4e34dad977c58c7f202a  d3d9.dll
+f10086ccd6fdf5f5f5498356ba533683fcb50abf9d619507276739b0f7ca5b82  d3d9.dll
 ```
 
 ## Selector binary included
@@ -136,10 +136,10 @@ have been repeated against the rebuilt DLL in the target game environment.
 
 Static routing audit for the current source:
 
-| Process | First `Direct3DCreate9` / `Direct3DCreate9Ex` | Later create calls | Wrapped for RHW fixup |
+| Process | Startup `Direct3DCreate9` / `Direct3DCreate9Ex` calls | Later create calls | Wrapped for RHW fixup |
 | --- | --- | --- | --- |
 | `MultiverseLauncher.exe` | system D3D9 | system D3D9 | no |
-| `popTBM.exe` | system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
+| `popTBM.exe` | system D3D9 while `create_call <= [popTBM] deferCreates` | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
 | `D3DPopTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
 | `popTB.exe` | `d3d9-remix.dll` if available, otherwise system D3D9 | `d3d9-remix.dll` if available, otherwise system D3D9 | only when the selected module is `d3d9-remix.dll` |
 
@@ -153,19 +153,32 @@ Static concurrency audit for the current source:
 
 - `select_d3d9_for_create()` snapshots the process classification, increments
   `g_direct3d_create_calls` while holding the selector spin lock, and uses the
-  local increment result for the `popTBM.exe` first-create decision.
+  local increment result for the `popTBM.exe` defer-count decision.
 - `g_remix_active`, `g_real_d3d9`, `g_system_d3d9`, and `g_remix_d3d9` are read
   and written while holding the same lock; DLL loads happen outside the lock,
   then the selected module pointer is published under the lock.
+- The RHW proxy allocation path is only reached after `Direct3DCreate9` or
+  `Direct3DCreate9Ex` returns an object from `d3d9-remix.dll`; startup calls
+  routed to system D3D9 return unwrapped system objects and cannot own an RHW
+  vertex declaration.
 - `D3D9_Release()` clears its proxy slot when the forwarded COM `Release`
   returns zero.
 - `Device_Release()` releases the cached RHW vertex declaration and clears its
   proxy slot when the forwarded COM `Release` returns zero.
 
+Changed files in this branch:
+
+- `README.md`
+- `d3d9-selector.ini`
+- `d3d9.dll`
+- `docs/crash-analysis.md`
+- `docs/validation.md`
+- `src/d3d9-remix-selector/d3d9_remix_selector.c`
+
 Required runtime release checks:
 
 1. Start `MultiverseLauncher.exe` and confirm it loads system D3D9, not Remix.
-2. Start `popTBM.exe` and confirm the first D3D9 create uses system D3D9.
+2. Start `popTBM.exe` and confirm the first two D3D9 creates use system D3D9 with the default `d3d9-selector.ini`.
 3. Confirm the next `popTBM.exe` D3D9 create uses `d3d9-remix.dll` and returns a wrapped D3D9 object.
 4. Confirm `D3DPopTB.exe` and `popTB.exe` create calls use `d3d9-remix.dll` and return wrapped D3D9 objects.
 5. Temporarily remove or rename `d3d9-remix.dll` and confirm all game create calls fall back to unwrapped system D3D9.

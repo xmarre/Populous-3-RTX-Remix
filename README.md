@@ -15,6 +15,7 @@ D:\Spiele\Populous 3\d3d9.dll             <-- included selector shim from this r
 D:\Spiele\Populous 3\d3d9-remix.dll       <-- NVIDIA RTX Remix root d3d9.dll, renamed
 D:\Spiele\Populous 3\.trex\               <-- NVIDIA RTX Remix runtime folder
 D:\Spiele\Populous 3\rtx.conf
+D:\Spiele\Populous 3\d3d9-selector.ini     <-- startup-device defer count
 D:\Spiele\Populous 3\rtx-remix\captures\
 D:\Spiele\Populous 3\rtx-remix\logs\
 D:\Spiele\Populous 3\rtx-remix\mods\
@@ -23,7 +24,7 @@ D:\Spiele\Populous 3\rtx-remix\mods\
 Runtime behavior:
 
 - `MultiverseLauncher.exe` gets the real system `d3d9.dll`.
-- `popTBM.exe` gets system D3D9 for its first D3D9 create call, then `d3d9-remix.dll` for later create calls. This avoids the observed crash when the Multiverse build tears down its startup D3D9 object while entering the menu.
+- `popTBM.exe` gets system D3D9 for its first two D3D9 create calls by default, then `d3d9-remix.dll` for later create calls. This keeps Remix out of Multiverse startup/movie devices that are torn down before the real game/menu device. The count is configurable in `d3d9-selector.ini`.
 - `D3DPopTB.exe` and `popTB.exe` get `d3d9-remix.dll`, which is the renamed NVIDIA RTX Remix bridge.
 - If `d3d9-remix.dll` is missing, the selector falls back to the system `d3d9.dll` instead of crashing the launcher.
 
@@ -71,6 +72,20 @@ width=800
 ```
 
 The Multiverse Launcher FAQ documents DirectX 9 as the relevant renderer dependency and suggests switching renderer mode only as a workaround for DirectX 9 startup failure. For RTX Remix testing, keep the Direct3D9 path enabled.
+
+
+## Startup-device defer setting
+
+`popTBM.exe` creates short-lived D3D9 objects before the actual menu/game renderer is stable. RTX Remix has been observed to crash when attached to those temporary devices during teardown. The selector therefore keeps Remix out of the first two `popTBM.exe` `Direct3DCreate9` / `Direct3DCreate9Ex` calls by default.
+
+Config file:
+
+```ini
+[popTBM]
+deferCreates=2
+```
+
+Use `3` if the intro video still crashes before the menu. Use `1` only if Remix no longer loads after reaching gameplay.
 
 ## Current D3D9 fixup
 
